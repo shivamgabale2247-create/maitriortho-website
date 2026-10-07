@@ -10,6 +10,15 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google Fonts Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- MaitriOrtho online backend configuration + Supabase browser client -->
+    <script>
+        // Publishable browser key only. Database and Storage access are protected by RLS.
+        window.MAITRIORTHO_CONFIG = {
+            SUPABASE_URL: 'https://pncmxbpfuzgbzssrboxm.supabase.co',
+            SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_jnSWP3-i4rVDBqpWxT8q0g_gqBtld5Z'
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -38,30 +47,761 @@
     <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
     <script>
-        const STORAGE_KEY = 'orthocare_pro_database_v3';
+        const SUPABASE_BUCKET = 'clinical-records';
+        const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+        const CONFIG = window.MAITRIORTHO_CONFIG || {};
+        const SUPABASE_URL = (CONFIG.SUPABASE_URL || '').trim();
+        const SUPABASE_PUBLISHABLE_KEY = (CONFIG.SUPABASE_PUBLISHABLE_KEY || '').trim();
+        const SUPABASE_CONFIGURED = Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY && window.supabase);
+        const supabaseClient = SUPABASE_CONFIGURED
+            ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+            : null;
 
         let appState = {
-            doctorName: localStorage.getItem('orthocare_doctor') || 'Dr. Shivam Gabale',
-            currentView: localStorage.getItem('orthocare_doctor') ? 'dashboard' : 'login',
+            doctorName: '',
+            doctorEmail: '',
+            currentView: 'login',
             selectedPatientId: null,
-            activeStageTab: 'pre', // 'pre', 'mid', 'post'
-            activeSubTab: 'extraoral', // 'extraoral', 'intraoral', 'cephalogram', 'opg', 'extra_records', 'treatment_plan'
+            activeStageTab: 'pre',
+            activeSubTab: 'extraoral',
             searchQuery: '',
             statusFilter: 'all',
             modalOpen: false,
-            modalType: null, // 'add_patient', 'upload_photo'
+            modalType: null,
             activePhotoSlot: null,
-            patients: JSON.parse(localStorage.getItem(STORAGE_KEY)) || getDefaultPatients()
+            patients: [],
+            authMode: 'login',
+            booting: true,
+            user: null,
+            authLoadingUserId: null,
+            role: 'doctor',
+            doctors: [],
+            viewingDoctorId: null,
+            viewingDoctorName: '',
+            viewingDoctorEmail: ''
         };
 
-        function saveState() {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appState.patients));
-            if (appState.doctorName) {
-                localStorage.setItem('orthocare_doctor', appState.doctorName);
-            } else {
-                localStorage.removeItem('orthocare_doctor');
+        function todayISO() {
+            return new Date().toISOString().split('T')[0];
+        }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-rose-600' : 'bg-slate-800';
+            toast.className = `${bgClass} text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm font-medium transform translate-y-2 opacity-0 transition-all duration-300 pointer-events-auto`;
+            const icon = document.createElement('i');
+            icon.className = `fa-solid ${type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} text-lg`;
+            const span = document.createElement('span');
+            span.textContent = message;
+            toast.append(icon, span);
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        function renderLoading() {
+            return `
+                <div class="flex-1 flex items-center justify-center bg-slate-100 p-4">
+                    <div class="bg-white rounded-2xl shadow-xl border border-slate-200 p-8 text-center max-w-md w-full">
+                        <div class="w-16 h-16 bg-emerald-600 text-white rounded-2xl flex items-center justify-center text-3xl font-bold mx-auto mb-4 shadow-lg shadow-emerald-600/30">
+                            <i class="fa-solid fa-tooth"></i>
+                        </div>
+                        <h2 class="text-xl font-bold text-slate-800">MaitriOrtho</h2>
+                        <p class="text-sm text-slate-500 mt-2">Connecting securely to your clinical workspace…</p>
+                        <div class="mt-5 h-1.5 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-emerald-600 rounded-full animate-pulse w-2/3 mx-auto"></div></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSetupRequired() {
+            return `
+                <div class="flex-1 flex items-center justify-center bg-gradient-to-br from-teal-900 via-slate-900 to-emerald-950 p-4 relative overflow-hidden">
+                    <div class="absolute inset-0 opacity-10 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:16px_16px]"></div>
+                    <div class="max-w-lg w-full bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-8 border border-white/20 relative z-10 text-center">
+                        <div class="w-16 h-16 bg-emerald-600 text-white rounded-2xl flex items-center justify-center text-3xl font-bold mx-auto mb-4 shadow-lg shadow-emerald-600/30">
+                            <i class="fa-solid fa-tooth"></i>
+                        </div>
+                        <h1 class="text-2xl font-bold text-slate-900">maitriortho.in</h1>
+                        <p class="text-slate-500 text-sm mt-1">Secure cloud configuration required</p>
+                        <div class="mt-6 text-left bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600">
+                            <p class="font-semibold text-slate-800 mb-2">Finish setup before using the portal</p>
+                            <p>Open <strong>config.js</strong> in this website and enter your Supabase Project URL and Publishable Key. Do not put a service-role/secret key here.</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            if (!app) return;
+            app.innerHTML = '';
+
+            if (!SUPABASE_CONFIGURED) {
+                app.innerHTML = renderSetupRequired();
+                return;
+            }
+
+            if (appState.booting) {
+                app.innerHTML = renderLoading();
+                return;
+            }
+
+            if (appState.currentView === 'login') {
+                app.innerHTML = renderLogin();
+                attachLoginListeners();
+            } else if (appState.currentView === 'admin_dashboard') {
+                app.innerHTML = renderAdminDashboard();
+                attachAdminDashboardListeners();
+            } else if (appState.currentView === 'dashboard') {
+                app.innerHTML = renderDashboard();
+                attachDashboardListeners();
+            } else if (appState.currentView === 'patient_detail') {
+                app.innerHTML = renderPatientDetail();
+                attachPatientDetailListeners();
+            }
+
+            if (appState.modalOpen) {
+                app.innerHTML += renderModal();
+                attachModalListeners();
             }
         }
+
+        function emptyStages() {
+            return {
+                pre: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
+                mid: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
+                post: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} }
+            };
+        }
+
+        function mapPatientRow(row) {
+            return {
+                id: row.id,
+                name: row.name || '',
+                age: row.age ?? '',
+                gender: row.gender || '',
+                phone: row.phone || '',
+                malocclusion: row.malocclusion || '',
+                startDate: row.start_date || todayISO(),
+                status: row.status || 'Active',
+                lastVisit: row.last_visit || row.start_date || todayISO(),
+                treatmentPlan: row.treatment_plan || '',
+                stages: emptyStages()
+            };
+        }
+
+        function setRecordInPatient(patient, record, signedUrl = '') {
+            const stage = patient.stages[record.stage];
+            if (!stage || !stage[record.category]) return;
+            stage[record.category][record.slot] = {
+                url: signedUrl || '',
+                caption: record.caption || 'Clinical Record',
+                storagePath: record.storage_path || '',
+                recordId: record.id,
+                contentType: record.content_type || '',
+                originalFilename: record.original_filename || ''
+            };
+        }
+
+        async function loadProfile(user) {
+            const { data, error } = await supabaseClient
+                .from('profiles')
+                .select('doctor_name,email,role')
+                .eq('id', user.id)
+                .maybeSingle();
+            if (error) throw error;
+            appState.doctorName = data?.doctor_name || user.user_metadata?.doctor_name || 'Doctor';
+            appState.doctorEmail = data?.email || user.email || '';
+            appState.role = data?.role || 'doctor';
+        }
+
+        async function signedUrlFor(path) {
+            if (!path) return '';
+            const { data, error } = await supabaseClient.storage
+                .from(SUPABASE_BUCKET)
+                .createSignedUrl(path, 3600);
+            if (error) {
+                console.warn('Signed URL generation failed:', error.message);
+                return '';
+            }
+            return data?.signedUrl || '';
+        }
+
+        async function loadCloudPatients(ownerId = null) {
+            let patientQuery = supabaseClient
+                .from('patients')
+                .select('*')
+                .order('created_at', { ascending: false });
+            if (ownerId) patientQuery = patientQuery.eq('owner_id', ownerId);
+
+            const { data: patientRows, error: patientError } = await patientQuery;
+            if (patientError) throw patientError;
+
+            const patients = (patientRows || []).map(mapPatientRow);
+            if (!patients.length) return patients;
+
+            const patientIds = patients.map(p => p.id);
+            const { data: recordRows, error: recordError } = await supabaseClient
+                .from('clinical_records')
+                .select('*')
+                .in('patient_id', patientIds)
+                .order('created_at', { ascending: true });
+            if (recordError) throw recordError;
+
+            const byId = new Map(patients.map(p => [p.id, p]));
+            await Promise.all((recordRows || []).map(async record => {
+                const patient = byId.get(record.patient_id);
+                if (!patient) return;
+                const url = await signedUrlFor(record.storage_path);
+                setRecordInPatient(patient, record, url);
+            }));
+            return patients;
+        }
+
+        async function loadDoctorsForAdmin() {
+            const { data: doctorRows, error: doctorError } = await supabaseClient
+                .from('profiles')
+                .select('id,doctor_name,email,role,created_at')
+                .eq('role', 'doctor')
+                .order('doctor_name', { ascending: true });
+            if (doctorError) throw doctorError;
+
+            const { data: patientRows, error: patientError } = await supabaseClient
+                .from('patients')
+                .select('owner_id');
+            if (patientError) throw patientError;
+
+            const counts = new Map();
+            (patientRows || []).forEach(row => counts.set(row.owner_id, (counts.get(row.owner_id) || 0) + 1));
+
+            appState.doctors = (doctorRows || []).map(d => ({
+                id: d.id,
+                name: d.doctor_name || 'Doctor',
+                email: d.email || '',
+                patientCount: counts.get(d.id) || 0,
+                createdAt: d.created_at || ''
+            }));
+            return appState.doctors;
+        }
+
+        function isAdminViewingDoctor() {
+            return appState.role === 'admin' && Boolean(appState.viewingDoctorId);
+        }
+
+        async function finishAuthentication(user) {
+            if (!user || appState.authLoadingUserId === user.id) return;
+            appState.authLoadingUserId = user.id;
+            appState.user = user;
+            appState.booting = true;
+            render();
+            try {
+                await loadProfile(user);
+                appState.viewingDoctorId = null;
+                appState.viewingDoctorName = '';
+                appState.viewingDoctorEmail = '';
+                if (appState.role === 'admin') {
+                    appState.doctors = await loadDoctorsForAdmin();
+                    appState.patients = [];
+                    appState.currentView = 'admin_dashboard';
+                } else {
+                    appState.patients = await loadCloudPatients(user.id);
+                    appState.currentView = 'dashboard';
+                }
+                appState.booting = false;
+                render();
+            } catch (error) {
+                console.error(error);
+                appState.booting = false;
+                await supabaseClient.auth.signOut();
+                appState.user = null;
+                appState.currentView = 'login';
+                render();
+                showToast(`Unable to load your clinical workspace: ${error.message || 'Unknown error'}`, 'error');
+            } finally {
+                appState.authLoadingUserId = null;
+            }
+        }
+
+        function setAuthBusy(isBusy, text) {
+            const btn = document.querySelector('#login-form button[type="submit"]');
+            if (!btn) return;
+            btn.disabled = isBusy;
+            btn.classList.toggle('opacity-60', isBusy);
+            const span = btn.querySelector('span');
+            if (span) span.textContent = text;
+        }
+
+        function attachLoginListeners() {
+            const form = document.getElementById('login-form');
+            document.getElementById('auth-mode-toggle')?.addEventListener('click', () => {
+                appState.authMode = appState.authMode === 'login' ? 'signup' : 'login';
+                render();
+            });
+
+            form?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = document.getElementById('doctor-email')?.value.trim() || '';
+                const password = document.getElementById('doctor-password')?.value || '';
+                const name = document.getElementById('doctor-name')?.value.trim() || '';
+                if (!email || !password || (appState.authMode === 'signup' && !name)) return;
+                if (password.length < 8) {
+                    showToast('Password must contain at least 8 characters.', 'error');
+                    return;
+                }
+
+                setAuthBusy(true, appState.authMode === 'login' ? 'Signing in…' : 'Creating account…');
+                try {
+                    if (appState.authMode === 'login') {
+                        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+                        if (error) throw error;
+                        await finishAuthentication(data.user);
+                    } else {
+                        const { data, error } = await supabaseClient.auth.signUp({
+                            email,
+                            password,
+                            options: {
+                                data: { doctor_name: name },
+                                emailRedirectTo: window.location.href
+                            }
+                        });
+                        if (error) throw error;
+                        if (data.session && data.user) {
+                            await finishAuthentication(data.user);
+                        } else {
+                            showToast('Account created. Check your email to confirm the account, then sign in.', 'info');
+                            appState.authMode = 'login';
+                            render();
+                        }
+                    }
+                } catch (error) {
+                    console.error(error);
+                    showToast(error.message || 'Authentication failed.', 'error');
+                    setAuthBusy(false, appState.authMode === 'login' ? 'Access Doctor Portal' : 'Create Doctor Account');
+                }
+            });
+        }
+
+        async function deletePatientFromCloud(patientId) {
+            const { data: records, error: recordError } = await supabaseClient
+                .from('clinical_records')
+                .select('storage_path')
+                .eq('patient_id', patientId);
+            if (recordError) throw recordError;
+
+            const paths = (records || []).map(r => r.storage_path).filter(Boolean);
+            if (paths.length) {
+                const { error: storageError } = await supabaseClient.storage
+                    .from(SUPABASE_BUCKET)
+                    .remove(paths);
+                if (storageError) console.warn('Some clinical files could not be removed:', storageError.message);
+            }
+
+            const { error } = await supabaseClient.from('patients').delete().eq('id', patientId);
+            if (error) throw error;
+        }
+
+        async function createPatientInCloud(form) {
+            const payload = {
+                owner_id: appState.user.id,
+                name: form.name.trim(),
+                age: Number.parseInt(form.age, 10),
+                gender: form.gender,
+                phone: form.phone.trim(),
+                malocclusion: form.malocclusion.trim(),
+                start_date: todayISO(),
+                status: form.status,
+                last_visit: todayISO(),
+                treatment_plan: 'Initial orthodontic records taken.'
+            };
+            const { data, error } = await supabaseClient
+                .from('patients')
+                .insert(payload)
+                .select('*')
+                .single();
+            if (error) throw error;
+            return mapPatientRow(data);
+        }
+
+        async function saveTreatmentPlanToCloud(patient, text) {
+            const { data, error } = await supabaseClient
+                .from('patients')
+                .update({ treatment_plan: text, last_visit: todayISO(), updated_at: new Date().toISOString() })
+                .eq('id', patient.id)
+                .select('*')
+                .single();
+            if (error) throw error;
+            patient.treatmentPlan = data.treatment_plan || '';
+            patient.lastVisit = data.last_visit || patient.lastVisit;
+        }
+
+        function getFileExtension(file) {
+            const name = file.name || '';
+            const dot = name.lastIndexOf('.');
+            if (dot >= 0) return name.slice(dot).toLowerCase().replace(/[^a-z0-9.]/g, '');
+            const type = (file.type || '').toLowerCase();
+            return type === 'image/png' ? '.png' : type === 'image/webp' ? '.webp' : '.jpg';
+        }
+
+        async function uploadClinicalRecord({ patient, category, slot, stage, file, caption }) {
+            if (!file) throw new Error('Please select an image file.');
+            if (!file.type?.startsWith('image/')) throw new Error('Only image files are accepted.');
+            if (file.size > MAX_UPLOAD_BYTES) throw new Error('Please choose an image smaller than 10 MB.');
+
+            const existing = patient.stages?.[stage]?.[category]?.[slot] || {};
+            const extension = getFileExtension(file);
+            const path = `${appState.user.id}/${patient.id}/${stage}/${category}/${slot}-${crypto.randomUUID()}${extension}`;
+
+            const { error: uploadError } = await supabaseClient.storage
+                .from(SUPABASE_BUCKET)
+                .upload(path, file, {
+                    cacheControl: '3600',
+                    contentType: file.type,
+                    upsert: false
+                });
+            if (uploadError) throw uploadError;
+
+            const { data: row, error: dbError } = await supabaseClient
+                .from('clinical_records')
+                .upsert({
+                    owner_id: appState.user.id,
+                    patient_id: patient.id,
+                    stage,
+                    category,
+                    slot,
+                    storage_path: path,
+                    caption: caption || 'Clinical Record',
+                    original_filename: file.name || '',
+                    content_type: file.type || '',
+                    size_bytes: file.size
+                }, { onConflict: 'patient_id,stage,category,slot' })
+                .select('*')
+                .single();
+
+            if (dbError) {
+                await supabaseClient.storage.from(SUPABASE_BUCKET).remove([path]);
+                throw dbError;
+            }
+
+            if (existing.storagePath && existing.storagePath !== path) {
+                const { error: oldRemoveError } = await supabaseClient.storage.from(SUPABASE_BUCKET).remove([existing.storagePath]);
+                if (oldRemoveError) console.warn('Old file could not be removed:', oldRemoveError.message);
+            }
+
+            const signedUrl = await signedUrlFor(path);
+            setRecordInPatient(patient, row, signedUrl);
+        }
+
+        async function deleteClinicalRecord(patient, category, slot, stage) {
+            const record = patient.stages?.[stage]?.[category]?.[slot] || {};
+            if (!record.recordId && !record.storagePath) return;
+
+            if (record.storagePath) {
+                const { error: storageError } = await supabaseClient.storage.from(SUPABASE_BUCKET).remove([record.storagePath]);
+                if (storageError) console.warn('File removal warning:', storageError.message);
+            }
+
+            if (record.recordId) {
+                const { error } = await supabaseClient.from('clinical_records').delete().eq('id', record.recordId);
+                if (error) throw error;
+            } else {
+                const { error } = await supabaseClient
+                    .from('clinical_records')
+                    .delete()
+                    .eq('patient_id', patient.id)
+                    .eq('stage', stage)
+                    .eq('category', category)
+                    .eq('slot', slot);
+                if (error) throw error;
+            }
+
+            patient.stages[stage][category][slot] = {};
+        }
+
+        function attachDashboardListeners() {
+            document.getElementById('btn-back-to-doctors')?.addEventListener('click', async () => {
+                appState.viewingDoctorId = null;
+                appState.viewingDoctorName = '';
+                appState.viewingDoctorEmail = '';
+                appState.patients = [];
+                appState.booting = true;
+                render();
+                try {
+                    appState.doctors = await loadDoctorsForAdmin();
+                    appState.currentView = 'admin_dashboard';
+                } catch (error) {
+                    console.error(error);
+                    showToast(`Unable to reload doctors: ${error.message || 'Unknown error'}`, 'error');
+                    appState.currentView = 'admin_dashboard';
+                } finally {
+                    appState.booting = false;
+                    render();
+                }
+            });
+
+            document.getElementById('btn-logout')?.addEventListener('click', async () => {
+                try {
+                    await supabaseClient.auth.signOut();
+                } finally {
+                    appState.doctorName = '';
+                    appState.doctorEmail = '';
+                    appState.role = 'doctor';
+                    appState.currentView = 'login';
+                    appState.selectedPatientId = null;
+                    appState.patients = [];
+                    appState.doctors = [];
+                    appState.viewingDoctorId = null;
+                    appState.viewingDoctorName = '';
+                    appState.viewingDoctorEmail = '';
+                    appState.user = null;
+                    appState.authMode = 'login';
+                    render();
+                }
+            });
+
+            if (!isAdminViewingDoctor()) {
+                document.getElementById('btn-add-patient')?.addEventListener('click', () => {
+                    appState.modalOpen = true;
+                    appState.modalType = 'add_patient';
+                    render();
+                });
+            }
+
+            document.getElementById('patient-search')?.addEventListener('input', (e) => {
+                appState.searchQuery = e.target.value;
+            });
+
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.statusFilter = e.currentTarget.getAttribute('data-filter');
+                    render();
+                });
+            });
+
+            document.querySelectorAll('.open-patient').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    const id = e.currentTarget.getAttribute('data-id');
+                    if (id) {
+                        appState.selectedPatientId = id;
+                        appState.currentView = 'patient_detail';
+                        appState.activeStageTab = 'pre';
+                        appState.activeSubTab = 'extraoral';
+                        render();
+                    }
+                });
+            });
+
+            if (!isAdminViewingDoctor()) document.querySelectorAll('.delete-patient').forEach(el => {
+                el.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const id = e.currentTarget.getAttribute('data-id');
+                    if (!id || !confirm('Are you sure you want to delete this patient folder? This also removes its uploaded clinical files.')) return;
+                    try {
+                        await deletePatientFromCloud(id);
+                        appState.patients = appState.patients.filter(p => p.id !== id);
+                        showToast('Patient folder deleted.', 'error');
+                        render();
+                    } catch (error) {
+                        console.error(error);
+                        showToast(`Patient could not be deleted: ${error.message || 'Unknown error'}`, 'error');
+                    }
+                });
+            });
+        }
+
+        function attachPatientDetailListeners() {
+            document.getElementById('btn-back')?.addEventListener('click', () => {
+                appState.currentView = 'dashboard';
+                appState.selectedPatientId = null;
+                render();
+            });
+
+            document.querySelectorAll('.stage-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.activeStageTab = e.currentTarget.getAttribute('data-stage');
+                    render();
+                });
+            });
+
+            document.querySelectorAll('.subtab-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.activeSubTab = e.currentTarget.getAttribute('data-subtab');
+                    render();
+                });
+            });
+
+            if (!isAdminViewingDoctor()) document.getElementById('btn-save-plan')?.addEventListener('click', async (e) => {
+                const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                const txt = document.getElementById('treatment-plan-textarea')?.value || '';
+                const btn = e.currentTarget;
+                if (!p) return;
+                btn.disabled = true;
+                try {
+                    await saveTreatmentPlanToCloud(p, txt);
+                    showToast('Treatment plan saved successfully.');
+                } catch (error) {
+                    console.error(error);
+                    showToast(`Treatment plan could not be saved: ${error.message || 'Unknown error'}`, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+
+            document.querySelectorAll('.upload-trigger').forEach(el => {
+                const openUploader = () => {
+                    appState.activePhotoSlot = {
+                        category: el.getAttribute('data-category'),
+                        slot: el.getAttribute('data-slot')
+                    };
+                    appState.modalOpen = true;
+                    appState.modalType = 'upload_photo';
+                    render();
+                };
+                el.addEventListener('click', openUploader);
+                el.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    openUploader();
+                });
+            });
+
+            document.querySelectorAll('.delete-photo').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const cat = btn.getAttribute('data-category');
+                    const slot = btn.getAttribute('data-slot');
+                    const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                    if (!p) return;
+                    try {
+                        await deleteClinicalRecord(p, cat, slot, appState.activeStageTab);
+                        showToast('Record removed.', 'error');
+                        render();
+                    } catch (error) {
+                        console.error(error);
+                        showToast(`Record could not be removed: ${error.message || 'Unknown error'}`, 'error');
+                    }
+                });
+            });
+        }
+
+        function attachModalListeners() {
+            const closeModal = () => {
+                appState.modalOpen = false;
+                appState.modalType = null;
+                appState.activePhotoSlot = null;
+                render();
+            };
+
+            document.getElementById('modal-close')?.addEventListener('click', closeModal);
+            document.getElementById('modal-cancel')?.addEventListener('click', closeModal);
+
+            document.getElementById('add-patient-form')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const submit = e.currentTarget.querySelector('button[type="submit"]');
+                submit.disabled = true;
+                try {
+                    const newPatient = await createPatientInCloud({
+                        name: document.getElementById('new-name').value,
+                        age: document.getElementById('new-age').value,
+                        gender: document.getElementById('new-gender').value,
+                        phone: document.getElementById('new-phone').value,
+                        malocclusion: document.getElementById('new-malocclusion').value,
+                        status: document.getElementById('new-status').value
+                    });
+                    appState.patients.unshift(newPatient);
+                    appState.modalOpen = false;
+                    appState.modalType = null;
+                    showToast('Patient folder created successfully.');
+                    render();
+                } catch (error) {
+                    console.error(error);
+                    showToast(`Patient could not be created: ${error.message || 'Unknown error'}`, 'error');
+                    submit.disabled = false;
+                }
+            });
+
+            document.getElementById('upload-form')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const fileInput = document.getElementById('upload-file-input');
+                const captionInput = document.getElementById('upload-caption');
+                const submit = e.currentTarget.querySelector('button[type="submit"]');
+                const file = fileInput?.files[0];
+                const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                const { category, slot } = appState.activePhotoSlot || {};
+                if (!file || !p || !category || !slot) return;
+
+                submit.disabled = true;
+                const originalText = submit.textContent;
+                submit.textContent = 'Uploading…';
+                try {
+                    await uploadClinicalRecord({
+                        patient: p,
+                        category,
+                        slot,
+                        stage: appState.activeStageTab,
+                        file,
+                        caption: captionInput?.value || 'Clinical Record'
+                    });
+
+                    // Explicitly close after a successful upload. This is the requested modal fix.
+                    appState.modalOpen = false;
+                    appState.modalType = null;
+                    appState.activePhotoSlot = null;
+                    showToast('Record uploaded successfully.');
+                    render();
+                } catch (error) {
+                    console.error(error);
+                    showToast(`Record upload failed: ${error.message || 'Unknown error'}`, 'error');
+                    submit.disabled = false;
+                    submit.textContent = originalText;
+                }
+            });
+        }
+
+        async function initializeApp() {
+            if (!SUPABASE_CONFIGURED) {
+                appState.booting = false;
+                render();
+                return;
+            }
+
+            supabaseClient.auth.onAuthStateChange((event, session) => {
+                if (event === 'SIGNED_OUT') {
+                    appState.user = null;
+                    appState.patients = [];
+                    appState.doctorName = '';
+                    appState.doctorEmail = '';
+                    appState.currentView = 'login';
+                    appState.booting = false;
+                    render();
+                } else if (event === 'SIGNED_IN' && session?.user) {
+                    setTimeout(() => finishAuthentication(session.user), 0);
+                }
+            });
+
+            try {
+                const { data, error } = await supabaseClient.auth.getSession();
+                if (error) throw error;
+                if (data.session?.user) {
+                    await finishAuthentication(data.session.user);
+                } else {
+                    appState.booting = false;
+                    render();
+                }
+            } catch (error) {
+                console.error(error);
+                appState.booting = false;
+                render();
+                showToast(`Unable to initialize secure login: ${error.message || 'Unknown error'}`, 'error');
+            }
+        }
+
+        window.addEventListener('load', initializeApp);
 
         function getDefaultPatients() {
             return [
@@ -127,43 +867,8 @@
             ];
         }
 
-        function showToast(message, type = 'success') {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            const bgClass = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-rose-600' : 'bg-slate-800';
-            toast.className = `${bgClass} text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm font-medium transform translate-y-2 opacity-0 transition-all duration-300 pointer-events-auto`;
-            toast.innerHTML = `<i class="fa-solid ${type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} text-lg"></i><span>${message}</span>`;
-            container.appendChild(toast);
-            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
-            setTimeout(() => {
-                toast.classList.add('translate-y-2', 'opacity-0');
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-
-        function render() {
-            const app = document.getElementById('app');
-            if (!app) return;
-            app.innerHTML = '';
-
-            if (appState.currentView === 'login') {
-                app.innerHTML = renderLogin();
-                attachLoginListeners();
-            } else if (appState.currentView === 'dashboard') {
-                app.innerHTML = renderDashboard();
-                attachDashboardListeners();
-            } else if (appState.currentView === 'patient_detail') {
-                app.innerHTML = renderPatientDetail();
-                attachPatientDetailListeners();
-            }
-
-            if (appState.modalOpen) {
-                app.innerHTML += renderModal();
-                attachModalListeners();
-            }
-        }
-
-        function renderLogin() {
+function renderLogin() {
+            const signup = appState.authMode === 'signup';
             return `
                 <div class="flex-1 flex items-center justify-center bg-gradient-to-br from-teal-900 via-slate-900 to-emerald-950 p-4 relative overflow-hidden">
                     <div class="absolute inset-0 opacity-10 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:16px_16px]"></div>
@@ -176,19 +881,37 @@
                             <p class="text-slate-500 text-sm mt-1">Orthodontic Practice & Patient Records</p>
                         </div>
                         <form id="login-form" class="space-y-5">
+                            ${signup ? `
                             <div>
                                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Orthodontist Doctor Name</label>
                                 <div class="relative">
-                                    <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
-                                        <i class="fa-solid fa-user-doctor"></i>
-                                    </span>
-                                    <input type="text" id="doctor-input" required value="${appState.doctorName}" 
+                                    <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400"><i class="fa-solid fa-user-doctor"></i></span>
+                                    <input type="text" id="doctor-name" required placeholder="e.g. Dr. Shivam Gabale"
+                                        class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                            </div>` : ''}
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Doctor Email</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400"><i class="fa-solid fa-envelope"></i></span>
+                                    <input type="email" id="doctor-email" required autocomplete="email" placeholder="doctor@example.com"
+                                        class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Password</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400"><i class="fa-solid fa-lock"></i></span>
+                                    <input type="password" id="doctor-password" required minlength="8" autocomplete="current-password" placeholder="Minimum 8 characters"
                                         class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
                                 </div>
                             </div>
                             <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3 rounded-xl shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer">
-                                <span>Access Doctor Portal</span>
-                                <i class="fa-solid fa-arrow-right"></i>
+                                <span>${signup ? 'Create Doctor Account' : 'Access Doctor Portal'}</span>
+                                <i class="fa-solid ${signup ? 'fa-user-plus' : 'fa-arrow-right'}"></i>
+                            </button>
+                            <button type="button" id="auth-mode-toggle" class="w-full text-xs font-semibold text-emerald-700 hover:text-emerald-800 py-2 cursor-pointer">
+                                ${signup ? 'Already have an account? Sign in' : 'New doctor? Create an account'}
                             </button>
                         </form>
                     </div>
@@ -196,17 +919,135 @@
             `;
         }
 
-        function attachLoginListeners() {
-            document.getElementById('login-form')?.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const name = document.getElementById('doctor-input').value.trim();
-                if (name) {
-                    appState.doctorName = name;
-                    appState.currentView = 'dashboard';
-                    saveState();
-                    showToast(`Welcome, ${name}!`);
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function renderAdminDashboard() {
+            const doctors = appState.doctors || [];
+            return `
+                <div class="flex-1 flex flex-col h-full bg-slate-100 overflow-hidden">
+                    <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-xs">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center text-xl shadow-md shadow-emerald-600/20">
+                                <i class="fa-solid fa-tooth"></i>
+                            </div>
+                            <div>
+                                <h1 class="font-bold text-slate-800 text-lg leading-snug">maitriortho.in</h1>
+                                <p class="text-xs text-slate-500">Administrator: <span class="font-semibold text-emerald-700">${appState.doctorName}</span></p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <span class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-600"><i class="fa-solid fa-shield-halved mr-1.5"></i> Admin</span>
+                            <button id="btn-admin-logout" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all cursor-pointer">
+                                <i class="fa-solid fa-right-from-bracket"></i>
+                                <span class="hidden sm:inline">Logout</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    <main class="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full custom-scrollbar">
+                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs mb-6 flex items-center justify-between">
+                            <div>
+                                <h2 class="font-bold text-slate-800 text-base">Doctors</h2>
+                                <p class="text-xs text-slate-500 mt-1">Open a doctor to view their patient records.</p>
+                            </div>
+                            <span class="text-xs font-semibold text-slate-400 uppercase">${doctors.length} Doctor${doctors.length === 1 ? '' : 's'}</span>
+                        </div>
+
+                        ${doctors.length === 0 ? `
+                            <div class="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+                                <div class="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center text-2xl mx-auto mb-4"><i class="fa-solid fa-user-doctor"></i></div>
+                                <h3 class="text-lg font-bold text-slate-700">No doctors found</h3>
+                                <p class="text-sm text-slate-500 mt-1">Doctor accounts will appear here after registration.</p>
+                            </div>
+                        ` : `
+                            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                ${doctors.map(d => `
+                                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md transition-all flex flex-col overflow-hidden group">
+                                        <div class="p-5 flex-1">
+                                            <div class="flex items-start justify-between mb-3">
+                                                <div class="flex items-center gap-3">
+                                                    <div class="w-11 h-11 rounded-xl bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-base group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                                                        ${escapeHtml(d.name).split(' ').map(n => n[0]).join('')}
+                                                    </div>
+                                                    <div>
+                                                        <h3 class="font-bold text-slate-800 text-base group-hover:text-emerald-600 transition-colors">${escapeHtml(d.name)}</h3>
+                                                        <p class="text-xs text-slate-400">${escapeHtml(d.email)}</p>
+                                                    </div>
+                                                </div>
+                                                <span class="px-2.5 py-1 rounded-full text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-200">Active</span>
+                                            </div>
+                                            <div class="space-y-2 mt-4 pt-3 border-t border-slate-100 text-xs">
+                                                <div class="flex justify-between"><span class="text-slate-400">Patients:</span><span class="font-medium text-slate-700">${d.patientCount}</span></div>
+                                                <div class="flex justify-between"><span class="text-slate-400">Joined:</span><span class="font-medium text-slate-700">${d.createdAt ? new Date(d.createdAt).toLocaleDateString() : '—'}</span></div>
+                                            </div>
+                                        </div>
+                                        <div class="bg-slate-50 px-5 py-3 border-t border-slate-100 flex items-center justify-end text-xs">
+                                            <button class="text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1.5 open-doctor cursor-pointer" data-id="${d.id}" data-name="${escapeHtml(d.name)}" data-email="${escapeHtml(d.email)}">
+                                                <i class="fa-solid fa-folder-open"></i><span>Open Doctor</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `}
+                    </main>
+                </div>
+            `;
+        }
+
+        async function openDoctorAsAdmin(doctorId, doctorName, doctorEmail) {
+            appState.viewingDoctorId = doctorId;
+            appState.viewingDoctorName = doctorName || 'Doctor';
+            appState.viewingDoctorEmail = doctorEmail || '';
+            appState.searchQuery = '';
+            appState.statusFilter = 'all';
+            appState.booting = true;
+            render();
+            try {
+                appState.patients = await loadCloudPatients(doctorId);
+                appState.currentView = 'dashboard';
+            } catch (error) {
+                console.error(error);
+                showToast(`Unable to load doctor's patients: ${error.message || 'Unknown error'}`, 'error');
+                appState.patients = [];
+                appState.currentView = 'admin_dashboard';
+            } finally {
+                appState.booting = false;
+                render();
+            }
+        }
+
+        function attachAdminDashboardListeners() {
+            document.getElementById('btn-admin-logout')?.addEventListener('click', async () => {
+                try { await supabaseClient.auth.signOut(); } finally {
+                    appState.doctorName = '';
+                    appState.doctorEmail = '';
+                    appState.role = 'doctor';
+                    appState.currentView = 'login';
+                    appState.selectedPatientId = null;
+                    appState.patients = [];
+                    appState.doctors = [];
+                    appState.user = null;
+                    appState.authMode = 'login';
                     render();
                 }
+            });
+
+            document.querySelectorAll('.open-doctor').forEach(el => {
+                el.addEventListener('click', () => {
+                    openDoctorAsAdmin(
+                        el.getAttribute('data-id'),
+                        el.getAttribute('data-name') || 'Doctor',
+                        el.getAttribute('data-email') || ''
+                    );
+                });
             });
         }
 
@@ -226,14 +1067,19 @@
                             </div>
                             <div>
                                 <h1 class="font-bold text-slate-800 text-lg leading-snug">maitriortho.in</h1>
-                                <p class="text-xs text-slate-500">Practitioner: <span class="font-semibold text-emerald-700">${appState.doctorName}</span></p>
+                                <p class="text-xs text-slate-500">${isAdminViewingDoctor() ? 'Viewing Doctor: ' : 'Practitioner: '}<span class="font-semibold text-emerald-700">${isAdminViewingDoctor() ? escapeHtml(appState.viewingDoctorName) : escapeHtml(appState.doctorName)}</span></p>
                             </div>
                         </div>
                         <div class="flex items-center gap-3">
+                            ${isAdminViewingDoctor() ? `
+                            <button id="btn-back-to-doctors" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all cursor-pointer">
+                                <i class="fa-solid fa-arrow-left"></i>
+                                <span>Doctors</span>
+                            </button>` : `
                             <button id="btn-add-patient" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-sm flex items-center gap-2 transition-all cursor-pointer">
                                 <i class="fa-solid fa-user-plus"></i>
                                 <span>Add New Patient</span>
-                            </button>
+                            </button>`}
                             <button id="btn-logout" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all cursor-pointer">
                                 <i class="fa-solid fa-right-from-bracket"></i>
                                 <span class="hidden sm:inline">Logout</span>
@@ -242,6 +1088,11 @@
                     </header>
 
                     <main class="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full custom-scrollbar">
+                        ${isAdminViewingDoctor() ? `
+                        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-700 flex items-center justify-between mb-4">
+                            <span><i class="fa-solid fa-eye mr-2"></i> Read-only administrator view of <strong>${escapeHtml(appState.viewingDoctorName)}</strong>.</span>
+                            <span class="font-mono bg-slate-200 px-2 py-0.5 rounded">ADMIN VIEW</span>
+                        </div>` : ''}
                         <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
                             <div class="relative w-full sm:w-96">
                                 <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
@@ -308,58 +1159,6 @@
             `;
         }
 
-        function attachDashboardListeners() {
-            document.getElementById('btn-logout')?.addEventListener('click', () => {
-                appState.doctorName = '';
-                appState.currentView = 'login';
-                saveState();
-                render();
-            });
-
-            document.getElementById('btn-add-patient')?.addEventListener('click', () => {
-                appState.modalOpen = true;
-                appState.modalType = 'add_patient';
-                render();
-            });
-
-            document.getElementById('patient-search')?.addEventListener('input', (e) => {
-                appState.searchQuery = e.target.value;
-            });
-
-            document.querySelectorAll('.filter-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    appState.statusFilter = e.currentTarget.getAttribute('data-filter');
-                    render();
-                });
-            });
-
-            document.querySelectorAll('.open-patient').forEach(el => {
-                el.addEventListener('click', (e) => {
-                    const id = e.currentTarget.getAttribute('data-id');
-                    if (id) {
-                        appState.selectedPatientId = id;
-                        appState.currentView = 'patient_detail';
-                        appState.activeStageTab = 'pre';
-                        appState.activeSubTab = 'extraoral';
-                        render();
-                    }
-                });
-            });
-
-            document.querySelectorAll('.delete-patient').forEach(el => {
-                el.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const id = e.currentTarget.getAttribute('data-id');
-                    if (confirm('Are you sure you want to delete this patient folder?')) {
-                        appState.patients = appState.patients.filter(p => p.id !== id);
-                        saveState();
-                        showToast('Patient folder deleted.', 'error');
-                        render();
-                    }
-                });
-            });
-        }
-
         function renderPatientDetail() {
             const p = appState.patients.find(x => x.id === appState.selectedPatientId);
             if (!p) {
@@ -392,7 +1191,7 @@
                                         <h1 class="text-lg font-bold text-slate-800">${p.name}</h1>
                                         <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">${p.status}</span>
                                     </div>
-                                    <p class="text-xs text-slate-500">${p.gender} • ${p.age} yrs • ID: ${p.id} • Ph: ${p.phone}</p>
+                                    <p class="text-xs text-slate-500">${p.gender} • ${p.age} yrs • ID: ${p.id} • Ph: ${p.phone}${isAdminViewingDoctor() ? ` • Viewing: ${escapeHtml(appState.viewingDoctorName)}` : ''}</p>
                                 </div>
                             </div>
                         </div>
@@ -471,15 +1270,15 @@
                                             <span>${v.label}</span>
                                             <span class="text-slate-400 font-mono text-[10px] uppercase">${appState.activeStageTab} stage</span>
                                         </div>
-                                        <div class="h-64 bg-slate-950 relative flex items-center justify-center overflow-hidden cursor-pointer upload-trigger" data-category="extraoral" data-slot="${v.key}">
+                                        <div class="h-64 bg-slate-950 relative flex items-center justify-center overflow-hidden ${isAdminViewingDoctor() ? '' : 'cursor-pointer upload-trigger'}" ${isAdminViewingDoctor() ? '' : `data-category="extraoral" data-slot="${v.key}"`}>
                                             <img src="${photo.url || 'https://placehold.co/600x400/1e293b/38bdf8?text=Click+to+Upload+' + v.label}" alt="${v.label}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onerror="this.src='https://placehold.co/600x400/1e293b/38bdf8?text=Placeholder'">
-                                            <div class="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2">
+                                            ${isAdminViewingDoctor() ? '' : `<div class="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2">
                                                 <i class="fa-solid fa-cloud-arrow-up text-lg"></i> Upload / Replace Photo
-                                            </div>
+                                            </div>`}
                                         </div>
                                         <div class="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
                                             <span class="text-slate-600 font-medium">${photo.caption || 'No caption recorded'}</span>
-                                            ${photo.url ? `<button class="text-rose-500 hover:text-rose-700 delete-photo cursor-pointer p-1" data-category="extraoral" data-slot="${v.key}" title="Remove"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                                            ${photo.url && !isAdminViewingDoctor() ? `<button class="text-rose-500 hover:text-rose-700 delete-photo cursor-pointer p-1" data-category="extraoral" data-slot="${v.key}" title="Remove"><i class="fa-solid fa-trash-can"></i></button>` : ''}
                                         </div>
                                     </div>
                                 `;
@@ -510,15 +1309,15 @@
                                             <span>${v.label}</span>
                                             <span class="text-slate-400 font-mono text-[10px] uppercase">${appState.activeStageTab}</span>
                                         </div>
-                                        <div class="h-56 bg-slate-950 relative flex items-center justify-center overflow-hidden cursor-pointer upload-trigger" data-category="intraoral" data-slot="${v.key}">
+                                        <div class="h-56 bg-slate-950 relative flex items-center justify-center overflow-hidden ${isAdminViewingDoctor() ? '' : 'cursor-pointer upload-trigger'}" ${isAdminViewingDoctor() ? '' : `data-category="intraoral" data-slot="${v.key}"`}>
                                             <img src="${photo.url || 'https://placehold.co/600x400/1e293b/38bdf8?text=Upload+' + v.label}" alt="${v.label}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onerror="this.src='https://placehold.co/600x400/1e293b/38bdf8?text=Placeholder'">
-                                            <div class="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2">
+                                            ${isAdminViewingDoctor() ? '' : `<div class="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2">
                                                 <i class="fa-solid fa-cloud-arrow-up text-lg"></i> Upload
-                                            </div>
+                                            </div>`}
                                         </div>
                                         <div class="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
                                             <span class="text-slate-600 font-medium truncate">${photo.caption || 'Intraoral record'}</span>
-                                            ${photo.url ? `<button class="text-rose-500 hover:text-rose-700 delete-photo cursor-pointer p-1" data-category="intraoral" data-slot="${v.key}" title="Remove"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                                            ${photo.url && !isAdminViewingDoctor() ? `<button class="text-rose-500 hover:text-rose-700 delete-photo cursor-pointer p-1" data-category="intraoral" data-slot="${v.key}" title="Remove"><i class="fa-solid fa-trash-can"></i></button>` : ''}
                                         </div>
                                     </div>
                                 `;
@@ -535,15 +1334,12 @@
                                 <h3 class="font-bold text-slate-800 text-base">Lateral Cephalograph Radiograph (${appState.activeStageTab.toUpperCase()})</h3>
                                 <p class="text-xs text-slate-500">Cephalometric analysis, SNA, SNB, ANB angles, and skeletal jaw relationship.</p>
                             </div>
-                            <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold upload-trigger cursor-pointer" data-category="cephalogram" data-slot="main">
-                                <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload Ceph Radiograph
+                                                            <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload Ceph Radiograph
                             </button>
                         </div>
                         <div class="h-96 bg-slate-950 rounded-2xl overflow-hidden relative flex items-center justify-center group cursor-pointer upload-trigger" data-category="cephalogram" data-slot="main">
                             <img src="${ceph.url || 'https://placehold.co/800x500/1e293b/38bdf8?text=Lateral+Cephalogram+Placeholder'}" class="w-full h-full object-contain" onerror="this.src='https://placehold.co/800x500/1e293b/38bdf8?text=Placeholder'">
-                            <div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2">
-                                <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload / Replace Ceph X-Ray
-                            </div>
+                            ${isAdminViewingDoctor() ? \'\' : `<div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2"> <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload / Replace Ceph X-Ray </div>`}
                         </div>
                         <div class="text-xs text-slate-600 font-medium">Caption / Analysis: ${ceph.caption || 'Pending cephalometric tracing analysis.'}</div>
                     </div>
@@ -557,15 +1353,12 @@
                                 <h3 class="font-bold text-slate-800 text-base">Orthopantomogram (OPG) (${appState.activeStageTab.toUpperCase()})</h3>
                                 <p class="text-xs text-slate-500">Panoramic dental radiograph evaluating root parallelism, bone levels, and third molars.</p>
                             </div>
-                            <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold upload-trigger cursor-pointer" data-category="opg" data-slot="main">
-                                <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload OPG Scan
+                                                            <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload OPG Scan
                             </button>
                         </div>
                         <div class="h-96 bg-slate-950 rounded-2xl overflow-hidden relative flex items-center justify-center group cursor-pointer upload-trigger" data-category="opg" data-slot="main">
                             <img src="${opg.url || 'https://placehold.co/800x500/1e293b/38bdf8?text=Orthopantomogram+(OPG)+Placeholder'}" class="w-full h-full object-contain" onerror="this.src='https://placehold.co/800x500/1e293b/38bdf8?text=Placeholder'">
-                            <div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2">
-                                <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload / Replace OPG Scan
-                            </div>
+                            ${isAdminViewingDoctor() ? \'\' : `<div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2"> <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload / Replace OPG Scan </div>`}
                         </div>
                         <div class="text-xs text-slate-600 font-medium">Radiographic Notes: ${opg.caption || 'Full mouth panoramic assessment.'}</div>
                     </div>
@@ -579,15 +1372,12 @@
                                 <h3 class="font-bold text-slate-800 text-base">Extra Records & 3D Model Scans (${appState.activeStageTab.toUpperCase()})</h3>
                                 <p class="text-xs text-slate-500">Digital dental cast STL screenshots, photographs of study models, or clinical reports.</p>
                             </div>
-                            <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold upload-trigger cursor-pointer" data-category="extra_records" data-slot="main">
-                                <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload Extra Records
+                                                            <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload Extra Records
                             </button>
                         </div>
                         <div class="h-96 bg-slate-950 rounded-2xl overflow-hidden relative flex items-center justify-center group cursor-pointer upload-trigger" data-category="extra_records" data-slot="main">
                             <img src="${ext.url || 'https://placehold.co/800x500/1e293b/38bdf8?text=Extra+Records+or+Dental+Model+Placeholder'}" class="w-full h-full object-contain" onerror="this.src='https://placehold.co/800x500/1e293b/38bdf8?text=Placeholder'">
-                            <div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2">
-                                <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload Extra Records
-                            </div>
+                            ${isAdminViewingDoctor() ? \'\' : `<div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2"> <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload Extra Records </div>`}
                         </div>
                         <div class="text-xs text-slate-600 font-medium">Record Details: ${ext.caption || 'Digital study models.'}</div>
                     </div>
@@ -600,96 +1390,21 @@
                                 <i class="fa-solid fa-file-prescription text-emerald-600 text-lg"></i>
                                 <h2>Customized Orthodontic Treatment Plan & Clinical Notes</h2>
                             </div>
-                            <span class="text-xs text-slate-400">Auto-saves to browser storage</span>
+                            <span class="text-xs text-slate-400">Syncs to secure cloud database</span>
                         </div>
                         <p class="text-xs text-slate-500 mb-4">Detail your diagnosis, appliance prescriptions, extractions, anchorage requirements, and clinical progress notes.</p>
-                        <textarea id="treatment-plan-textarea" rows="14" 
+                        <textarea id="treatment-plan-textarea" rows="14" ${isAdminViewingDoctor() ? 'readonly' : ''} 
                             class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all resize-y custom-scrollbar"
                             placeholder="Enter treatment plan steps...">${p.treatmentPlan || ''}</textarea>
                         <div class="mt-4 flex justify-end">
-                            <button id="btn-save-plan" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer">
+                            ${isAdminViewingDoctor() ? `<span class="text-xs font-semibold text-slate-400"><i class="fa-solid fa-eye mr-1.5"></i> Read-only administrator view</span>` : `<button id="btn-save-plan" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer">
                                 <i class="fa-solid fa-floppy-disk"></i>
                                 <span>Save Treatment Plan</span>
-                            </button>
+                            </button>`}
                         </div>
                     </div>
                 `;
             }
-        }
-
-        function attachPatientDetailListeners() {
-            document.getElementById('btn-back')?.addEventListener('click', () => {
-                appState.currentView = 'dashboard';
-                appState.selectedPatientId = null;
-                render();
-            });
-
-            document.querySelectorAll('.stage-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    appState.activeStageTab = e.currentTarget.getAttribute('data-stage');
-                    render();
-                });
-            });
-
-            document.querySelectorAll('.subtab-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    appState.activeSubTab = e.currentTarget.getAttribute('data-subtab');
-                    render();
-                });
-            });
-
-            document.getElementById('btn-save-plan')?.addEventListener('click', () => {
-                const p = appState.patients.find(x => x.id === appState.selectedPatientId);
-                const txt = document.getElementById('treatment-plan-textarea')?.value || '';
-                if (p) {
-                    p.treatmentPlan = txt;
-                    saveState();
-                    showToast('Treatment plan saved successfully.');
-                }
-            });
-
-            document.querySelectorAll('.upload-trigger').forEach(el => {
-                el.addEventListener('click', () => {
-                    appState.activePhotoSlot = {
-                        category: el.getAttribute('data-category'),
-                        slot: el.getAttribute('data-slot')
-                    };
-                    appState.modalOpen = true;
-                    appState.modalType = 'upload_photo';
-                    render();
-                });
-                
-                // Also support right click for photo slots
-                el.addEventListener('contextmenu', (e) => {
-                    e.preventDefault();
-                    appState.activePhotoSlot = {
-                        category: el.getAttribute('data-category'),
-                        slot: el.getAttribute('data-slot')
-                    };
-                    appState.modalOpen = true;
-                    appState.modalType = 'upload_photo';
-                    render();
-                });
-            });
-
-            document.querySelectorAll('.delete-photo').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const cat = btn.getAttribute('data-category');
-                    const slot = btn.getAttribute('data-slot');
-                    const p = appState.patients.find(x => x.id === appState.selectedPatientId);
-                    if (p) {
-                        if (cat === 'extraoral') {
-                            p.stages[appState.activeStageTab].extraoral[slot] = {};
-                        } else if (cat === 'intraoral') {
-                            p.stages[appState.activeStageTab].intraoral[slot] = {};
-                        }
-                        saveState();
-                        showToast('Record removed.', 'error');
-                        render();
-                    }
-                });
-            });
         }
 
         function renderModal() {
@@ -774,97 +1489,6 @@
             }
             return '';
         }
-
-        function attachModalListeners() {
-            const closeModal = () => {
-                appState.modalOpen = false;
-                appState.modalType = null;
-                render();
-            };
-
-            document.getElementById('modal-close')?.addEventListener('click', closeModal);
-            document.getElementById('modal-cancel')?.addEventListener('click', closeModal);
-
-            document.getElementById('add-patient-form')?.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const newPatient = {
-                    id: 'p-' + Date.now().toString().slice(-4),
-                    name: document.getElementById('new-name').value,
-                    age: parseInt(document.getElementById('new-age').value),
-                    gender: document.getElementById('new-gender').value,
-                    phone: document.getElementById('new-phone').value,
-                    malocclusion: document.getElementById('new-malocclusion').value,
-                    startDate: new Date().toISOString().split('T')[0],
-                    status: document.getElementById('new-status').value,
-                    lastVisit: new Date().toISOString().split('T')[0],
-                    treatmentPlan: 'Initial orthodontic records taken.',
-                    stages: {
-                        pre: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
-                        mid: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
-                        post: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} }
-                    }
-                };
-                appState.patients.unshift(newPatient);
-                saveState();
-                appState.modalOpen = false;
-                showToast('Patient folder created successfully.');
-                render();
-            });
-
-            document.getElementById('upload-form')?.addEventListener('submit', (e) => {
-                e.preventDefault();
-                const fileInput = document.getElementById('upload-file-input');
-                const captionInput = document.getElementById('upload-caption');
-                const file = fileInput?.files[0];
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = function(evt) {
-                        const p = appState.patients.find(x => x.id === appState.selectedPatientId);
-                        const { category, slot } = appState.activePhotoSlot || {};
-                        const caption = captionInput?.value || 'Clinical Record';
-
-                        if (p && category) {
-                            if (category === 'extraoral') {
-                                p.stages[appState.activeStageTab].extraoral[slot] = { url: evt.target.result, caption };
-                            } else if (category === 'intraoral') {
-                                p.stages[appState.activeStageTab].intraoral[slot] = { url: evt.target.result, caption };
-                            } else if (category === 'cephalogram') {
-                                p.stages[appState.activeStageTab].cephalogram = { url: evt.target.result, caption };
-                            } else if (category === 'opg') {
-                                p.stages[appState.activeStageTab].opg = { url: evt.target.result, caption };
-                            } else if (category === 'extra_records') {
-                                p.stages[appState.activeStageTab].extra_records = { url: evt.target.result, caption };
-                            }
-
-                            let storageSaved = true;
-                            try {
-                                saveState();
-                            } catch (storageError) {
-                                storageSaved = false;
-                                console.error('Unable to persist uploaded record to browser storage:', storageError);
-                            }
-
-                            // Always close the upload dialog after the file has been processed.
-                            appState.modalOpen = false;
-                            appState.modalType = null;
-                            appState.activePhotoSlot = null;
-                            showToast(
-                                storageSaved
-                                    ? 'Record uploaded successfully.'
-                                    : 'Record uploaded for this session, but browser storage is full.',
-                                storageSaved ? 'success' : 'error'
-                            );
-                            render();
-                        }
-                    };
-                    reader.readAsDataURL(file);
-                }
-            });
-        }
-
-        window.onload = function() {
-            render();
-        };
     </script>
 </body>
 </html>
