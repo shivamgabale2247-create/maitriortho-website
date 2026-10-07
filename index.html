@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>maitriortho.in - Orthodontic Patient Management</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="h-full bg-slate-100 text-slate-800 antialiased flex flex-col">
+
+    <!-- App Root Container -->
+    <div id="app" class="flex-1 flex flex-col h-full overflow-hidden"></div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <script>
+        const STORAGE_KEY = 'orthocare_pro_database_v3';
+
+        let appState = {
+            doctorName: localStorage.getItem('orthocare_doctor') || 'Dr. Shivam Gabale',
+            currentView: localStorage.getItem('orthocare_doctor') ? 'dashboard' : 'login',
+            selectedPatientId: null,
+            activeStageTab: 'pre', // 'pre', 'mid', 'post'
+            activeSubTab: 'extraoral', // 'extraoral', 'intraoral', 'cephalogram', 'opg', 'extra_records', 'treatment_plan'
+            searchQuery: '',
+            statusFilter: 'all',
+            modalOpen: false,
+            modalType: null, // 'add_patient', 'upload_photo'
+            activePhotoSlot: null,
+            patients: JSON.parse(localStorage.getItem(STORAGE_KEY)) || getDefaultPatients()
+        };
+
+        function saveState() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appState.patients));
+            if (appState.doctorName) {
+                localStorage.setItem('orthocare_doctor', appState.doctorName);
+            } else {
+                localStorage.removeItem('orthocare_doctor');
+            }
+        }
+
+        function getDefaultPatients() {
+            return [
+                {
+                    id: 'p-101',
+                    name: 'Emma Watson',
+                    age: 16,
+                    gender: 'Female',
+                    phone: '+1 (555) 234-5678',
+                    malocclusion: 'Class II Division 1, Overjet 7mm',
+                    startDate: '2025-01-15',
+                    status: 'Active',
+                    lastVisit: '2026-03-20',
+                    treatmentPlan: '1. Leveling and aligning using 0.022 MBT prescription brackets.\n2. Maxillary premolar extractions (#14, #24) for severe crowding.\n3. Class II elastics with temporary anchorage devices (TADs).\n4. Finishing and detailing phase.\n5. Fixed bonded retainers + Hawley removable retainers.',
+                    stages: {
+                        pre: {
+                            extraoral: {
+                                frontal: { url: 'https://placehold.co/600x400/0f766e/ffffff?text=Pre+Frontal+View', caption: 'Initial Frontal Neutral' },
+                                lateral: { url: 'https://placehold.co/600x400/0f766e/ffffff?text=Pre+Lateral+View', caption: 'Initial Profile Lateral' },
+                                oblique_smiling: { url: 'https://placehold.co/600x400/0f766e/ffffff?text=Pre+Oblique+Smiling', caption: 'Initial Oblique Smile' },
+                                frontal_smiling: { url: 'https://placehold.co/600x400/0f766e/ffffff?text=Pre+Frontal+Smiling', caption: 'Initial Frontal Smile' }
+                            },
+                            intraoral: {
+                                right_lateral: { url: 'https://placehold.co/600x400/0284c7/ffffff?text=Pre+Right+Lateral', caption: 'Right Buccal Class II' },
+                                left_lateral: { url: 'https://placehold.co/600x400/0284c7/ffffff?text=Pre+Left+Lateral', caption: 'Left Buccal Class II' },
+                                frontal: { url: 'https://placehold.co/600x400/0284c7/ffffff?text=Pre+Intraoral+Frontal', caption: 'Overjet & Overbite' },
+                                max_occlusal: { url: 'https://placehold.co/600x400/0284c7/ffffff?text=Pre+Maxillary+Occlusal', caption: 'Upper Arch Crowding' },
+                                mand_occlusal: { url: 'https://placehold.co/600x400/0284c7/ffffff?text=Pre+Mandibular+Occlusal', caption: 'Lower Arch Alignment' }
+                            },
+                            cephalogram: { url: 'https://placehold.co/600x400/1e293b/38bdf8?text=Pre-Treatment+Lateral+Ceph', caption: 'Skeletal Class II Ceph Analysis' },
+                            opg: { url: 'https://placehold.co/600x400/1e293b/38bdf8?text=Pre-Treatment+OPG', caption: 'Full Mouth OPG (All 32 teeth present)' },
+                            extra_records: { url: 'https://placehold.co/600x400/1e293b/38bdf8?text=Pre-Treatment+Models+STL', caption: 'Pre-Treatment Dental Cast Scans' }
+                        },
+                        mid: {
+                            extraoral: { frontal: {}, lateral: {}, oblique_smiling: {}, frontal_smiling: {} },
+                            intraoral: { right_lateral: {}, left_lateral: {}, frontal: {}, max_occlusal: {}, mand_occlusal: {} },
+                            cephalogram: {}, opg: {}, extra_records: {}
+                        },
+                        post: {
+                            extraoral: { frontal: {}, lateral: {}, oblique_smiling: {}, frontal_smiling: {} },
+                            intraoral: { right_lateral: {}, left_lateral: {}, frontal: {}, max_occlusal: {}, mand_occlusal: {} },
+                            cephalogram: {}, opg: {}, extra_records: {}
+                        }
+                    }
+                },
+                {
+                    id: 'p-102',
+                    name: 'Liam Johnson',
+                    age: 14,
+                    gender: 'Male',
+                    phone: '+1 (555) 987-6543',
+                    malocclusion: 'Class III Anterior Crossbite',
+                    startDate: '2024-11-10',
+                    status: 'Retention',
+                    lastVisit: '2026-02-14',
+                    treatmentPlan: '1. Rapid Maxillary Expansion (RME).\n2. Full fixed appliance bonding.\n3. Class III elastics.',
+                    stages: {
+                        pre: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
+                        mid: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
+                        post: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} }
+                    }
+                }
+            ];
+        }
+
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-rose-600' : 'bg-slate-800';
+            toast.className = `${bgClass} text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm font-medium transform translate-y-2 opacity-0 transition-all duration-300 pointer-events-auto`;
+            toast.innerHTML = `<i class="fa-solid ${type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} text-lg"></i><span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
+            setTimeout(() => {
+                toast.classList.add('translate-y-2', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            if (!app) return;
+            app.innerHTML = '';
+
+            if (appState.currentView === 'login') {
+                app.innerHTML = renderLogin();
+                attachLoginListeners();
+            } else if (appState.currentView === 'dashboard') {
+                app.innerHTML = renderDashboard();
+                attachDashboardListeners();
+            } else if (appState.currentView === 'patient_detail') {
+                app.innerHTML = renderPatientDetail();
+                attachPatientDetailListeners();
+            }
+
+            if (appState.modalOpen) {
+                app.innerHTML += renderModal();
+                attachModalListeners();
+            }
+        }
+
+        function renderLogin() {
+            return `
+                <div class="flex-1 flex items-center justify-center bg-gradient-to-br from-teal-900 via-slate-900 to-emerald-950 p-4 relative overflow-hidden">
+                    <div class="absolute inset-0 opacity-10 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:16px_16px]"></div>
+                    <div class="max-w-md w-full bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-8 border border-white/20 relative z-10">
+                        <div class="text-center mb-8">
+                            <div class="w-16 h-16 bg-emerald-600 text-white rounded-2xl flex items-center justify-center text-3xl font-bold mx-auto mb-4 shadow-lg shadow-emerald-600/30">
+                                <i class="fa-solid fa-tooth"></i>
+                            </div>
+                            <h1 class="text-2xl font-bold text-slate-900">maitriortho.in</h1>
+                            <p class="text-slate-500 text-sm mt-1">Orthodontic Practice & Patient Records</p>
+                        </div>
+                        <form id="login-form" class="space-y-5">
+                            <div>
+                                <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-2">Orthodontist Doctor Name</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
+                                        <i class="fa-solid fa-user-doctor"></i>
+                                    </span>
+                                    <input type="text" id="doctor-input" required value="${appState.doctorName}" 
+                                        class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                            </div>
+                            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3 rounded-xl shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer">
+                                <span>Access Doctor Portal</span>
+                                <i class="fa-solid fa-arrow-right"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        function attachLoginListeners() {
+            document.getElementById('login-form')?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const name = document.getElementById('doctor-input').value.trim();
+                if (name) {
+                    appState.doctorName = name;
+                    appState.currentView = 'dashboard';
+                    saveState();
+                    showToast(`Welcome, ${name}!`);
+                    render();
+                }
+            });
+        }
+
+        function renderDashboard() {
+            const filtered = appState.patients.filter(p => {
+                const matchSearch = p.name.toLowerCase().includes(appState.searchQuery.toLowerCase()) || p.malocclusion.toLowerCase().includes(appState.searchQuery.toLowerCase());
+                const matchStatus = appState.statusFilter === 'all' || p.status.toLowerCase() === appState.statusFilter.toLowerCase();
+                return matchSearch && matchStatus;
+            });
+
+            return `
+                <div class="flex-1 flex flex-col h-full bg-slate-100 overflow-hidden">
+                    <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-xs">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center text-xl shadow-md shadow-emerald-600/20">
+                                <i class="fa-solid fa-tooth"></i>
+                            </div>
+                            <div>
+                                <h1 class="font-bold text-slate-800 text-lg leading-snug">maitriortho.in</h1>
+                                <p class="text-xs text-slate-500">Practitioner: <span class="font-semibold text-emerald-700">${appState.doctorName}</span></p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button id="btn-add-patient" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-sm font-medium shadow-sm flex items-center gap-2 transition-all cursor-pointer">
+                                <i class="fa-solid fa-user-plus"></i>
+                                <span>Add New Patient</span>
+                            </button>
+                            <button id="btn-logout" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2.5 rounded-xl text-sm font-medium flex items-center gap-2 transition-all cursor-pointer">
+                                <i class="fa-solid fa-right-from-bracket"></i>
+                                <span class="hidden sm:inline">Logout</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    <main class="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full custom-scrollbar">
+                        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                            <div class="relative w-full sm:w-96">
+                                <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
+                                    <i class="fa-solid fa-search"></i>
+                                </span>
+                                <input type="text" id="patient-search" value="${appState.searchQuery}" placeholder="Search patient name, malocclusion..." 
+                                    class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div class="flex items-center gap-2 w-full sm:w-auto overflow-x-auto">
+                                <span class="text-xs font-semibold text-slate-500 uppercase">Status:</span>
+                                <button data-filter="all" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${appState.statusFilter === 'all' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">All (${appState.patients.length})</button>
+                                <button data-filter="active" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${appState.statusFilter === 'active' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">Active</button>
+                                <button data-filter="retention" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${appState.statusFilter === 'retention' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">Retention</button>
+                                <button data-filter="completed" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${appState.statusFilter === 'completed' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">Completed</button>
+                            </div>
+                        </div>
+
+                        ${filtered.length === 0 ? `
+                            <div class="bg-white rounded-2xl border border-slate-200 p-12 text-center">
+                                <div class="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center text-2xl mx-auto mb-4"><i class="fa-solid fa-folder-open"></i></div>
+                                <h3 class="text-lg font-bold text-slate-700">No patients found</h3>
+                                <p class="text-sm text-slate-500 mt-1">Add a new patient record to get started.</p>
+                            </div>
+                        ` : `
+                            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                                ${filtered.map(p => {
+                                    const stColor = p.status === 'Active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : p.status === 'Retention' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-blue-50 text-blue-700 border-blue-200';
+                                    return `
+                                        <div class="bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md transition-all flex flex-col overflow-hidden group">
+                                            <div class="p-5 flex-1 cursor-pointer open-patient" data-id="${p.id}">
+                                                <div class="flex items-start justify-between mb-3">
+                                                    <div class="flex items-center gap-3">
+                                                        <div class="w-11 h-11 rounded-xl bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-base group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                                                            ${p.name.split(' ').map(n => n[0]).join('')}
+                                                        </div>
+                                                        <div>
+                                                            <h3 class="font-bold text-slate-800 text-base group-hover:text-emerald-600 transition-colors">${p.name}</h3>
+                                                            <p class="text-xs text-slate-400">${p.gender}, ${p.age} yrs • ${p.phone}</p>
+                                                        </div>
+                                                    </div>
+                                                    <span class="px-2.5 py-1 rounded-full text-xs font-semibold border ${stColor}">${p.status}</span>
+                                                </div>
+                                                <div class="space-y-2 mt-4 pt-3 border-t border-slate-100 text-xs">
+                                                    <div class="flex justify-between"><span class="text-slate-400">Diagnosis:</span><span class="font-medium text-slate-700 truncate max-w-[180px]" title="${p.malocclusion}">${p.malocclusion}</span></div>
+                                                    <div class="flex justify-between"><span class="text-slate-400">Start Date:</span><span class="font-medium text-slate-700">${p.startDate}</span></div>
+                                                    <div class="flex justify-between"><span class="text-slate-400">Last Visit:</span><span class="font-medium text-slate-700">${p.lastVisit}</span></div>
+                                                </div>
+                                            </div>
+                                            <div class="bg-slate-50 px-5 py-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                                                <button class="text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1.5 open-patient cursor-pointer" data-id="${p.id}">
+                                                    <i class="fa-solid fa-folder-open"></i><span>Open Patient Folder</span>
+                                                </button>
+                                                <button class="text-slate-400 hover:text-rose-600 delete-patient p-1 cursor-pointer" data-id="${p.id}" title="Delete Record">
+                                                    <i class="fa-solid fa-trash-can"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        `}
+                    </main>
+                </div>
+            `;
+        }
+
+        function attachDashboardListeners() {
+            document.getElementById('btn-logout')?.addEventListener('click', () => {
+                appState.doctorName = '';
+                appState.currentView = 'login';
+                saveState();
+                render();
+            });
+
+            document.getElementById('btn-add-patient')?.addEventListener('click', () => {
+                appState.modalOpen = true;
+                appState.modalType = 'add_patient';
+                render();
+            });
+
+            document.getElementById('patient-search')?.addEventListener('input', (e) => {
+                appState.searchQuery = e.target.value;
+            });
+
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.statusFilter = e.currentTarget.getAttribute('data-filter');
+                    render();
+                });
+            });
+
+            document.querySelectorAll('.open-patient').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    const id = e.currentTarget.getAttribute('data-id');
+                    if (id) {
+                        appState.selectedPatientId = id;
+                        appState.currentView = 'patient_detail';
+                        appState.activeStageTab = 'pre';
+                        appState.activeSubTab = 'extraoral';
+                        render();
+                    }
+                });
+            });
+
+            document.querySelectorAll('.delete-patient').forEach(el => {
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const id = e.currentTarget.getAttribute('data-id');
+                    if (confirm('Are you sure you want to delete this patient folder?')) {
+                        appState.patients = appState.patients.filter(p => p.id !== id);
+                        saveState();
+                        showToast('Patient folder deleted.', 'error');
+                        render();
+                    }
+                });
+            });
+        }
+
+        function renderPatientDetail() {
+            const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+            if (!p) {
+                return `
+                    <div class="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-100">
+                        <div class="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center text-2xl mb-4"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                        <h2 class="text-lg font-bold text-slate-800">Patient Record Not Found</h2>
+                        <p class="text-sm text-slate-500 mt-1 mb-4">The selected patient folder may have been deleted.</p>
+                        <button onclick="appState.currentView='dashboard';render();" class="bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium cursor-pointer">Return to Dashboard</button>
+                    </div>
+                `;
+            }
+
+            const stageMeta = p.stages[appState.activeStageTab] || { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} };
+
+            return `
+                <div class="flex-1 flex flex-col h-full bg-slate-100 overflow-hidden">
+                    <!-- Patient Header -->
+                    <header class="bg-white border-b border-slate-200 px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-xs">
+                        <div class="flex items-center gap-4">
+                            <button id="btn-back" class="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-all cursor-pointer">
+                                <i class="fa-solid fa-arrow-left"></i>
+                            </button>
+                            <div class="flex items-center gap-3">
+                                <div class="w-12 h-12 rounded-2xl bg-emerald-600 text-white font-bold flex items-center justify-center text-lg shadow-md">
+                                    ${p.name.split(' ').map(n => n[0]).join('')}
+                                </div>
+                                <div>
+                                    <div class="flex items-center gap-2">
+                                        <h1 class="text-lg font-bold text-slate-800">${p.name}</h1>
+                                        <span class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">${p.status}</span>
+                                    </div>
+                                    <p class="text-xs text-slate-500">${p.gender} • ${p.age} yrs • ID: ${p.id} • Ph: ${p.phone}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 text-xs">
+                            <span class="text-slate-400 block">Malocclusion / Chief Complaint</span>
+                            <span class="font-bold text-slate-700">${p.malocclusion}</span>
+                        </div>
+                    </header>
+
+                    <!-- Treatment Stage Tabs Bar (Pre / Mid / Post) -->
+                    <div class="bg-slate-900 text-white px-6 py-3 flex items-center justify-between gap-4 overflow-x-auto">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider mr-2"><i class="fa-solid fa-timeline mr-1"></i> Treatment Stage:</span>
+                            <button data-stage="pre" class="stage-btn px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${appState.activeStageTab === 'pre' ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}">
+                                <i class="fa-solid fa-hourglass-start mr-1.5"></i> Pre-Treatment
+                            </button>
+                            <button data-stage="mid" class="stage-btn px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${appState.activeStageTab === 'mid' ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}">
+                                <i class="fa-solid fa-arrows-split-up-and-left mr-1.5"></i> Mid-Treatment / Retraction
+                            </button>
+                            <button data-stage="post" class="stage-btn px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${appState.activeStageTab === 'post' ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}">
+                                <i class="fa-solid fa-flag-checkered mr-1.5"></i> Post-Treatment
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Records Category Navigation Sub-Bar -->
+                    <div class="bg-white border-b border-slate-200 px-6 flex items-center gap-2 overflow-x-auto">
+                        <button data-subtab="extraoral" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'extraoral' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-user"></i> Extraoral Photographs
+                        </button>
+                        <button data-subtab="intraoral" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'intraoral' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-teeth"></i> Intraoral Photographs
+                        </button>
+                        <button data-subtab="cephalogram" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'cephalogram' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-x-ray"></i> Lateral Cephalograph
+                        </button>
+                        <button data-subtab="opg" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'opg' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-film"></i> Orthopantomogram (OPG)
+                        </button>
+                        <button data-subtab="extra_records" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'extra_records' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-cube"></i> Extra Records / Models
+                        </button>
+                        <button data-subtab="treatment_plan" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'treatment_plan' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-file-prescription"></i> Treatment Plan & Notes
+                        </button>
+                    </div>
+
+                    <!-- Main Tab Content Area -->
+                    <main class="flex-1 overflow-y-auto p-6 max-w-7xl mx-auto w-full custom-scrollbar">
+                        ${renderActiveSubTabContent(p, stageMeta)}
+                    </main>
+                </div>
+            `;
+        }
+
+        function renderActiveSubTabContent(p, stageMeta) {
+            if (appState.activeSubTab === 'extraoral') {
+                const views = [
+                    { key: 'frontal', label: 'Frontal View' },
+                    { key: 'lateral', label: 'Lateral View (Profile)' },
+                    { key: 'oblique_smiling', label: 'Oblique Smiling' },
+                    { key: 'frontal_smiling', label: 'Frontal Smiling' }
+                ];
+                return `
+                    <div class="space-y-4">
+                        <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-800 flex items-center justify-between">
+                            <span><i class="fa-solid fa-circle-info mr-2"></i> Click or right-click any extraoral card slot to upload or update patient photographs for <strong>${appState.activeStageTab.toUpperCase()}</strong> stage.</span>
+                            <span class="font-mono bg-emerald-200 px-2 py-0.5 rounded">Extraoral View Gallery</span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            ${views.map(v => {
+                                const photo = stageMeta.extraoral[v.key] || {};
+                                return `
+                                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col group">
+                                        <div class="bg-slate-900 px-4 py-3 text-white flex items-center justify-between text-xs font-bold">
+                                            <span>${v.label}</span>
+                                            <span class="text-slate-400 font-mono text-[10px] uppercase">${appState.activeStageTab} stage</span>
+                                        </div>
+                                        <div class="h-64 bg-slate-950 relative flex items-center justify-center overflow-hidden cursor-pointer upload-trigger" data-category="extraoral" data-slot="${v.key}">
+                                            <img src="${photo.url || 'https://placehold.co/600x400/1e293b/38bdf8?text=Click+to+Upload+' + v.label}" alt="${v.label}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onerror="this.src='https://placehold.co/600x400/1e293b/38bdf8?text=Placeholder'">
+                                            <div class="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2">
+                                                <i class="fa-solid fa-cloud-arrow-up text-lg"></i> Upload / Replace Photo
+                                            </div>
+                                        </div>
+                                        <div class="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
+                                            <span class="text-slate-600 font-medium">${photo.caption || 'No caption recorded'}</span>
+                                            ${photo.url ? `<button class="text-rose-500 hover:text-rose-700 delete-photo cursor-pointer p-1" data-category="extraoral" data-slot="${v.key}" title="Remove"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            } else if (appState.activeSubTab === 'intraoral') {
+                const views = [
+                    { key: 'right_lateral', label: 'Right Lateral View' },
+                    { key: 'left_lateral', label: 'Left Lateral View' },
+                    { key: 'frontal', label: 'Intraoral Frontal' },
+                    { key: 'max_occlusal', label: 'Maxillary Occlusal' },
+                    { key: 'mand_occlusal', label: 'Mandibular Occlusal' }
+                ];
+                return `
+                    <div class="space-y-4">
+                        <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-800 flex items-center justify-between">
+                            <span><i class="fa-solid fa-circle-info mr-2"></i> Intraoral clinical records for <strong>${appState.activeStageTab.toUpperCase()}</strong> treatment stage.</span>
+                            <span class="font-mono bg-emerald-200 px-2 py-0.5 rounded">Intraoral Gallery</span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            ${views.map(v => {
+                                const photo = stageMeta.intraoral[v.key] || {};
+                                return `
+                                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex flex-col group">
+                                        <div class="bg-slate-900 px-4 py-3 text-white flex items-center justify-between text-xs font-bold">
+                                            <span>${v.label}</span>
+                                            <span class="text-slate-400 font-mono text-[10px] uppercase">${appState.activeStageTab}</span>
+                                        </div>
+                                        <div class="h-56 bg-slate-950 relative flex items-center justify-center overflow-hidden cursor-pointer upload-trigger" data-category="intraoral" data-slot="${v.key}">
+                                            <img src="${photo.url || 'https://placehold.co/600x400/1e293b/38bdf8?text=Upload+' + v.label}" alt="${v.label}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onerror="this.src='https://placehold.co/600x400/1e293b/38bdf8?text=Placeholder'">
+                                            <div class="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-semibold gap-2">
+                                                <i class="fa-solid fa-cloud-arrow-up text-lg"></i> Upload
+                                            </div>
+                                        </div>
+                                        <div class="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
+                                            <span class="text-slate-600 font-medium truncate">${photo.caption || 'Intraoral record'}</span>
+                                            ${photo.url ? `<button class="text-rose-500 hover:text-rose-700 delete-photo cursor-pointer p-1" data-category="intraoral" data-slot="${v.key}" title="Remove"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            } else if (appState.activeSubTab === 'cephalogram') {
+                const ceph = stageMeta.cephalogram || {};
+                return `
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                            <div>
+                                <h3 class="font-bold text-slate-800 text-base">Lateral Cephalograph Radiograph (${appState.activeStageTab.toUpperCase()})</h3>
+                                <p class="text-xs text-slate-500">Cephalometric analysis, SNA, SNB, ANB angles, and skeletal jaw relationship.</p>
+                            </div>
+                            <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold upload-trigger cursor-pointer" data-category="cephalogram" data-slot="main">
+                                <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload Ceph Radiograph
+                            </button>
+                        </div>
+                        <div class="h-96 bg-slate-950 rounded-2xl overflow-hidden relative flex items-center justify-center group cursor-pointer upload-trigger" data-category="cephalogram" data-slot="main">
+                            <img src="${ceph.url || 'https://placehold.co/800x500/1e293b/38bdf8?text=Lateral+Cephalogram+Placeholder'}" class="w-full h-full object-contain" onerror="this.src='https://placehold.co/800x500/1e293b/38bdf8?text=Placeholder'">
+                            <div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2">
+                                <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload / Replace Ceph X-Ray
+                            </div>
+                        </div>
+                        <div class="text-xs text-slate-600 font-medium">Caption / Analysis: ${ceph.caption || 'Pending cephalometric tracing analysis.'}</div>
+                    </div>
+                `;
+            } else if (appState.activeSubTab === 'opg') {
+                const opg = stageMeta.opg || {};
+                return `
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                            <div>
+                                <h3 class="font-bold text-slate-800 text-base">Orthopantomogram (OPG) (${appState.activeStageTab.toUpperCase()})</h3>
+                                <p class="text-xs text-slate-500">Panoramic dental radiograph evaluating root parallelism, bone levels, and third molars.</p>
+                            </div>
+                            <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold upload-trigger cursor-pointer" data-category="opg" data-slot="main">
+                                <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload OPG Scan
+                            </button>
+                        </div>
+                        <div class="h-96 bg-slate-950 rounded-2xl overflow-hidden relative flex items-center justify-center group cursor-pointer upload-trigger" data-category="opg" data-slot="main">
+                            <img src="${opg.url || 'https://placehold.co/800x500/1e293b/38bdf8?text=Orthopantomogram+(OPG)+Placeholder'}" class="w-full h-full object-contain" onerror="this.src='https://placehold.co/800x500/1e293b/38bdf8?text=Placeholder'">
+                            <div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2">
+                                <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload / Replace OPG Scan
+                            </div>
+                        </div>
+                        <div class="text-xs text-slate-600 font-medium">Radiographic Notes: ${opg.caption || 'Full mouth panoramic assessment.'}</div>
+                    </div>
+                `;
+            } else if (appState.activeSubTab === 'extra_records') {
+                const ext = stageMeta.extra_records || {};
+                return `
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                            <div>
+                                <h3 class="font-bold text-slate-800 text-base">Extra Records & 3D Model Scans (${appState.activeStageTab.toUpperCase()})</h3>
+                                <p class="text-xs text-slate-500">Digital dental cast STL screenshots, photographs of study models, or clinical reports.</p>
+                            </div>
+                            <button class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-semibold upload-trigger cursor-pointer" data-category="extra_records" data-slot="main">
+                                <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> Upload Extra Records
+                            </button>
+                        </div>
+                        <div class="h-96 bg-slate-950 rounded-2xl overflow-hidden relative flex items-center justify-center group cursor-pointer upload-trigger" data-category="extra_records" data-slot="main">
+                            <img src="${ext.url || 'https://placehold.co/800x500/1e293b/38bdf8?text=Extra+Records+or+Dental+Model+Placeholder'}" class="w-full h-full object-contain" onerror="this.src='https://placehold.co/800x500/1e293b/38bdf8?text=Placeholder'">
+                            <div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2">
+                                <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload Extra Records
+                            </div>
+                        </div>
+                        <div class="text-xs text-slate-600 font-medium">Record Details: ${ext.caption || 'Digital study models.'}</div>
+                    </div>
+                `;
+            } else if (appState.activeSubTab === 'treatment_plan') {
+                return `
+                    <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 flex flex-col">
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-2 text-slate-800 font-bold">
+                                <i class="fa-solid fa-file-prescription text-emerald-600 text-lg"></i>
+                                <h2>Customized Orthodontic Treatment Plan & Clinical Notes</h2>
+                            </div>
+                            <span class="text-xs text-slate-400">Auto-saves to browser storage</span>
+                        </div>
+                        <p class="text-xs text-slate-500 mb-4">Detail your diagnosis, appliance prescriptions, extractions, anchorage requirements, and clinical progress notes.</p>
+                        <textarea id="treatment-plan-textarea" rows="14" 
+                            class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all resize-y custom-scrollbar"
+                            placeholder="Enter treatment plan steps...">${p.treatmentPlan || ''}</textarea>
+                        <div class="mt-4 flex justify-end">
+                            <button id="btn-save-plan" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer">
+                                <i class="fa-solid fa-floppy-disk"></i>
+                                <span>Save Treatment Plan</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        function attachPatientDetailListeners() {
+            document.getElementById('btn-back')?.addEventListener('click', () => {
+                appState.currentView = 'dashboard';
+                appState.selectedPatientId = null;
+                render();
+            });
+
+            document.querySelectorAll('.stage-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.activeStageTab = e.currentTarget.getAttribute('data-stage');
+                    render();
+                });
+            });
+
+            document.querySelectorAll('.subtab-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    appState.activeSubTab = e.currentTarget.getAttribute('data-subtab');
+                    render();
+                });
+            });
+
+            document.getElementById('btn-save-plan')?.addEventListener('click', () => {
+                const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                const txt = document.getElementById('treatment-plan-textarea')?.value || '';
+                if (p) {
+                    p.treatmentPlan = txt;
+                    saveState();
+                    showToast('Treatment plan saved successfully.');
+                }
+            });
+
+            document.querySelectorAll('.upload-trigger').forEach(el => {
+                el.addEventListener('click', () => {
+                    appState.activePhotoSlot = {
+                        category: el.getAttribute('data-category'),
+                        slot: el.getAttribute('data-slot')
+                    };
+                    appState.modalOpen = true;
+                    appState.modalType = 'upload_photo';
+                    render();
+                });
+                
+                // Also support right click for photo slots
+                el.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    appState.activePhotoSlot = {
+                        category: el.getAttribute('data-category'),
+                        slot: el.getAttribute('data-slot')
+                    };
+                    appState.modalOpen = true;
+                    appState.modalType = 'upload_photo';
+                    render();
+                });
+            });
+
+            document.querySelectorAll('.delete-photo').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const cat = btn.getAttribute('data-category');
+                    const slot = btn.getAttribute('data-slot');
+                    const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                    if (p) {
+                        if (cat === 'extraoral') {
+                            p.stages[appState.activeStageTab].extraoral[slot] = {};
+                        } else if (cat === 'intraoral') {
+                            p.stages[appState.activeStageTab].intraoral[slot] = {};
+                        }
+                        saveState();
+                        showToast('Record removed.', 'error');
+                        render();
+                    }
+                });
+            });
+        }
+
+        function renderModal() {
+            if (appState.modalType === 'add_patient') {
+                return `
+                    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
+                            <div class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                                <h3 class="font-bold text-base flex items-center gap-2"><i class="fa-solid fa-user-plus text-emerald-400"></i> Add New Patient</h3>
+                                <button id="modal-close" class="text-slate-400 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+                            </div>
+                            <form id="add-patient-form" class="p-6 space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Patient Full Name</label>
+                                    <input type="text" id="new-name" required placeholder="e.g. Sarah Connor" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Age</label>
+                                        <input type="number" id="new-age" required min="3" max="99" value="15" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Gender</label>
+                                        <select id="new-gender" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                            <option value="Female">Female</option>
+                                            <option value="Male">Male</option>
+                                            <option value="Other">Other</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Phone</label>
+                                        <input type="text" id="new-phone" required placeholder="+1 (555) 000-0000" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Status</label>
+                                        <select id="new-status" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                            <option value="Active">Active Treatment</option>
+                                            <option value="Retention">Retention</option>
+                                            <option value="Completed">Completed</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Malocclusion / Chief Complaint</label>
+                                    <input type="text" id="new-malocclusion" required placeholder="e.g. Class II Division 1" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                                <div class="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                                    <button type="button" id="modal-cancel" class="px-5 py-2.5 rounded-xl text-sm font-medium bg-slate-100 text-slate-700 cursor-pointer">Cancel</button>
+                                    <button type="submit" class="px-5 py-2.5 rounded-xl text-sm font-medium bg-emerald-600 text-white shadow-md cursor-pointer">Create Patient Folder</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+            } else if (appState.modalType === 'upload_photo') {
+                return `
+                    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+                            <div class="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
+                                <h3 class="font-bold text-base flex items-center gap-2"><i class="fa-solid fa-cloud-arrow-up text-emerald-400"></i> Upload Clinical Record</h3>
+                                <button id="modal-close" class="text-slate-400 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+                            </div>
+                            <form id="upload-form" class="p-6 space-y-4">
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Caption / Notes</label>
+                                    <input type="text" id="upload-caption" placeholder="e.g. Initial alignment progress" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">Select Image File</label>
+                                    <input type="file" id="upload-file-input" required accept="image/*" class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm">
+                                </div>
+                                <div class="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                                    <button type="button" id="modal-cancel" class="px-5 py-2.5 rounded-xl text-sm font-medium bg-slate-100 text-slate-700 cursor-pointer">Cancel</button>
+                                    <button type="submit" class="px-5 py-2.5 rounded-xl text-sm font-medium bg-emerald-600 text-white shadow-md cursor-pointer">Upload & Save</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                `;
+            }
+            return '';
+        }
+
+        function attachModalListeners() {
+            const closeModal = () => {
+                appState.modalOpen = false;
+                appState.modalType = null;
+                render();
+            };
+
+            document.getElementById('modal-close')?.addEventListener('click', closeModal);
+            document.getElementById('modal-cancel')?.addEventListener('click', closeModal);
+
+            document.getElementById('add-patient-form')?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const newPatient = {
+                    id: 'p-' + Date.now().toString().slice(-4),
+                    name: document.getElementById('new-name').value,
+                    age: parseInt(document.getElementById('new-age').value),
+                    gender: document.getElementById('new-gender').value,
+                    phone: document.getElementById('new-phone').value,
+                    malocclusion: document.getElementById('new-malocclusion').value,
+                    startDate: new Date().toISOString().split('T')[0],
+                    status: document.getElementById('new-status').value,
+                    lastVisit: new Date().toISOString().split('T')[0],
+                    treatmentPlan: 'Initial orthodontic records taken.',
+                    stages: {
+                        pre: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
+                        mid: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} },
+                        post: { extraoral: {}, intraoral: {}, cephalogram: {}, opg: {}, extra_records: {} }
+                    }
+                };
+                appState.patients.unshift(newPatient);
+                saveState();
+                appState.modalOpen = false;
+                showToast('Patient folder created successfully.');
+                render();
+            });
+
+            document.getElementById('upload-form')?.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const fileInput = document.getElementById('upload-file-input');
+                const captionInput = document.getElementById('upload-caption');
+                const file = fileInput?.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                        const { category, slot } = appState.activePhotoSlot || {};
+                        const caption = captionInput?.value || 'Clinical Record';
+
+                        if (p && category) {
+                            if (category === 'extraoral') {
+                                p.stages[appState.activeStageTab].extraoral[slot] = { url: evt.target.result, caption };
+                            } else if (category === 'intraoral') {
+                                p.stages[appState.activeStageTab].intraoral[slot] = { url: evt.target.result, caption };
+                            } else if (category === 'cephalogram') {
+                                p.stages[appState.activeStageTab].cephalogram = { url: evt.target.result, caption };
+                            } else if (category === 'opg') {
+                                p.stages[appState.activeStageTab].opg = { url: evt.target.result, caption };
+                            } else if (category === 'extra_records') {
+                                p.stages[appState.activeStageTab].extra_records = { url: evt.target.result, caption };
+                            }
+
+                            let storageSaved = true;
+                            try {
+                                saveState();
+                            } catch (storageError) {
+                                storageSaved = false;
+                                console.error('Unable to persist uploaded record to browser storage:', storageError);
+                            }
+
+                            // Always close the upload dialog after the file has been processed.
+                            appState.modalOpen = false;
+                            appState.modalType = null;
+                            appState.activePhotoSlot = null;
+                            showToast(
+                                storageSaved
+                                    ? 'Record uploaded successfully.'
+                                    : 'Record uploaded for this session, but browser storage is full.',
+                                storageSaved ? 'success' : 'error'
+                            );
+                            render();
+                        }
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+        }
+
+        window.onload = function() {
+            render();
+        };
+    </script>
+</body>
+</html>
