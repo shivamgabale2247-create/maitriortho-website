@@ -78,7 +78,10 @@
             doctors: [],
             viewingDoctorId: null,
             viewingDoctorName: '',
-            viewingDoctorEmail: ''
+            viewingDoctorEmail: '',
+            timelineYear: new Date().getFullYear(),
+            timelineMonth: new Date().getMonth(),
+            selectedTimelineDate: null
         };
 
         function todayISO() {
@@ -184,6 +187,7 @@
         function mapPatientRow(row) {
             return {
                 id: row.id,
+                ownerId: row.owner_id || '',
                 name: row.name || '',
                 age: row.age ?? '',
                 gender: row.gender || '',
@@ -193,6 +197,8 @@
                 status: row.status || 'Active',
                 lastVisit: row.last_visit || row.start_date || todayISO(),
                 treatmentPlan: row.treatment_plan || '',
+                nextAppointmentDate: row.next_appointment_date || '',
+                timeline: {},
                 stages: emptyStages()
             };
         }
@@ -386,6 +392,150 @@
                     setAuthBusy(false, appState.authMode === 'login' ? 'Access Doctor Portal' : 'Create Doctor Account');
                 }
             });
+        }
+
+        async function loadTimelineForPatient(patientId) {
+            const { data, error } = await supabaseClient
+                .from('patient_timeline')
+                .select('*')
+                .eq('patient_id', patientId)
+                .order('event_date', { ascending: false });
+            if (error) throw error;
+            const patient = appState.patients.find(x => x.id === patientId);
+            if (!patient) return;
+            patient.timeline = {};
+            (data || []).forEach(row => {
+                patient.timeline[row.event_date] = {
+                    id: row.id,
+                    eventDate: row.event_date,
+                    workDone: row.work_done || '',
+                    createdAt: row.created_at || '',
+                    updatedAt: row.updated_at || ''
+                };
+            });
+        }
+
+        function localDateISO(date = new Date()) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function humanDate(dateKey) {
+            if (!dateKey) return '';
+            const [y, m, d] = dateKey.split('-').map(Number);
+            if (!y || !m || !d) return dateKey;
+            return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+                day: '2-digit', month: 'long', year: 'numeric'
+            });
+        }
+
+        function parseDateKey(dateKey) {
+            const [y, m, d] = dateKey.split('-').map(Number);
+            return new Date(y, m - 1, d);
+        }
+
+        function setTimelineMonthTo(dateKey) {
+            const d = parseDateKey(dateKey || localDateISO());
+            appState.timelineYear = d.getFullYear();
+            appState.timelineMonth = d.getMonth();
+        }
+
+        function buildTimelineCalendar(patient) {
+            const year = appState.timelineYear;
+            const month = appState.timelineMonth;
+            const first = new Date(year, month, 1);
+            const last = new Date(year, month + 1, 0);
+            const daysInMonth = last.getDate();
+            const mondayIndex = (first.getDay() + 6) % 7;
+            const monthLabel = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+            const selected = appState.selectedTimelineDate || localDateISO();
+            const today = localDateISO();
+            const cells = [];
+
+            for (let i = 0; i < mondayIndex; i++) {
+                cells.push('<div class="h-12"></div>');
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const entry = patient.timeline?.[key];
+                const isSelected = key === selected;
+                const isToday = key === today;
+                const isNext = key === patient.nextAppointmentDate;
+
+                let cls = 'h-12 rounded-xl flex flex-col items-center justify-center text-sm font-semibold border transition-all cursor-pointer relative';
+                if (isNext) {
+                    cls += ' bg-rose-600 text-white border-rose-600 shadow-sm';
+                } else if (isSelected) {
+                    cls += ' bg-emerald-600 text-white border-emerald-600 shadow-sm';
+                } else {
+                    cls += ' bg-white text-slate-700 border-slate-200 hover:border-emerald-400 hover:bg-emerald-50';
+                }
+                if (isToday && !isNext && !isSelected) cls += ' ring-1 ring-slate-400';
+
+                cells.push(`
+                    <button type="button" class="timeline-date-btn ${cls}" data-date="${key}" title="${entry ? 'Work recorded' : 'Select date'}${isNext ? ' • Next appointment' : ''}">
+                        <span>${day}</span>
+                        ${entry ? `<span class="w-1.5 h-1.5 rounded-full ${isNext || isSelected ? 'bg-white' : 'bg-emerald-600'} mt-0.5"></span>` : '<span class="h-1.5 mt-0.5"></span>'}
+                    </button>
+                `);
+            }
+
+            while (cells.length % 7 !== 0) cells.push('<div class="h-12"></div>');
+
+            return `
+                <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-5">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="font-bold text-slate-800 text-base">${monthLabel}</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Green dots mark work recorded. Red marks the next appointment.</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button id="timeline-prev-month" type="button" class="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer" title="Previous month"><i class="fa-solid fa-chevron-left"></i></button>
+                            <button id="timeline-next-month" type="button" class="w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer" title="Next month"><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-7 gap-2 mb-2">
+                        ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => `<div class="text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">${d}</div>`).join('')}
+                    </div>
+                    <div class="grid grid-cols-7 gap-2">${cells.join('')}</div>
+                </div>
+            `;
+        }
+
+        async function saveTimelineEntryToCloud(patient, eventDate, workDone) {
+            const payload = {
+                owner_id: patient.ownerId || (isAdminViewingDoctor() ? appState.viewingDoctorId : appState.user.id),
+                patient_id: patient.id,
+                event_date: eventDate,
+                work_done: workDone.trim()
+            };
+            const { data, error } = await supabaseClient
+                .from('patient_timeline')
+                .upsert(payload, { onConflict: 'patient_id,event_date' })
+                .select('*')
+                .single();
+            if (error) throw error;
+            patient.timeline[eventDate] = {
+                id: data.id,
+                eventDate: data.event_date,
+                workDone: data.work_done || '',
+                createdAt: data.created_at || '',
+                updatedAt: data.updated_at || ''
+            };
+        }
+
+        async function saveNextAppointmentToCloud(patient, date) {
+            const { data, error } = await supabaseClient
+                .from('patients')
+                .update({ next_appointment_date: date || null, updated_at: new Date().toISOString() })
+                .eq('id', patient.id)
+                .select('next_appointment_date')
+                .single();
+            if (error) throw error;
+            patient.nextAppointmentDate = data.next_appointment_date || '';
         }
 
         async function deletePatientFromCloud(patientId) {
@@ -585,13 +735,24 @@
             });
 
             document.querySelectorAll('.open-patient').forEach(el => {
-                el.addEventListener('click', (e) => {
+                el.addEventListener('click', async (e) => {
                     const id = e.currentTarget.getAttribute('data-id');
-                    if (id) {
-                        appState.selectedPatientId = id;
-                        appState.currentView = 'patient_detail';
-                        appState.activeStageTab = 'pre';
-                        appState.activeSubTab = 'extraoral';
+                    if (!id) return;
+                    appState.selectedPatientId = id;
+                    appState.currentView = 'patient_detail';
+                    appState.activeStageTab = 'pre';
+                    appState.activeSubTab = 'extraoral';
+                    appState.selectedTimelineDate = localDateISO();
+                    setTimelineMonthTo(appState.selectedTimelineDate);
+                    appState.booting = true;
+                    render();
+                    try {
+                        await loadTimelineForPatient(id);
+                    } catch (error) {
+                        console.error(error);
+                        showToast(`Unable to load work timeline: ${error.message || 'Unknown error'}`, 'error');
+                    } finally {
+                        appState.booting = false;
                         render();
                     }
                 });
@@ -619,6 +780,7 @@
             document.getElementById('btn-back')?.addEventListener('click', () => {
                 appState.currentView = 'dashboard';
                 appState.selectedPatientId = null;
+                appState.selectedTimelineDate = null;
                 render();
             });
 
@@ -652,6 +814,78 @@
                     btn.disabled = false;
                 }
             });
+
+            if (appState.activeSubTab === 'timeline') {
+                document.querySelectorAll('.timeline-date-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const date = e.currentTarget.getAttribute('data-date');
+                        appState.selectedTimelineDate = date;
+                        render();
+                    });
+                });
+
+                document.getElementById('timeline-prev-month')?.addEventListener('click', () => {
+                    appState.timelineMonth -= 1;
+                    if (appState.timelineMonth < 0) { appState.timelineMonth = 11; appState.timelineYear -= 1; }
+                    render();
+                });
+
+                document.getElementById('timeline-next-month')?.addEventListener('click', () => {
+                    appState.timelineMonth += 1;
+                    if (appState.timelineMonth > 11) { appState.timelineMonth = 0; appState.timelineYear += 1; }
+                    render();
+                });
+
+                document.querySelectorAll('.timeline-history-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const date = e.currentTarget.getAttribute('data-date');
+                        appState.selectedTimelineDate = date;
+                        setTimelineMonthTo(date);
+                        render();
+                    });
+                });
+
+                if (!isAdminViewingDoctor()) document.getElementById('btn-save-timeline-entry')?.addEventListener('click', async (e) => {
+                    const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                    const text = document.getElementById('timeline-work-done')?.value || '';
+                    const btn = e.currentTarget;
+                    if (!p || !appState.selectedTimelineDate || !text.trim()) {
+                        showToast('Please enter the work done before saving.', 'error');
+                        return;
+                    }
+                    btn.disabled = true;
+                    const old = btn.innerHTML;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Saving…</span>';
+                    try {
+                        await saveTimelineEntryToCloud(p, appState.selectedTimelineDate, text);
+                        showToast('Work done saved successfully.');
+                        render();
+                    } catch (error) {
+                        console.error(error);
+                        showToast(`Work entry could not be saved: ${error.message || 'Unknown error'}`, 'error');
+                        btn.disabled = false;
+                        btn.innerHTML = old;
+                    }
+                });
+
+                if (!isAdminViewingDoctor()) document.getElementById('btn-save-next-appointment')?.addEventListener('click', async (e) => {
+                    const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                    const date = document.getElementById('next-appointment-date')?.value || '';
+                    const btn = e.currentTarget;
+                    if (!p) return;
+                    btn.disabled = true;
+                    try {
+                        await saveNextAppointmentToCloud(p, date);
+                        showToast(date ? `Next appointment set for ${humanDate(date)}.` : 'Next appointment cleared.');
+                        setTimelineMonthTo(date || appState.selectedTimelineDate || localDateISO());
+                        render();
+                    } catch (error) {
+                        console.error(error);
+                        showToast(`Appointment could not be saved: ${error.message || 'Unknown error'}`, 'error');
+                        btn.disabled = false;
+                    }
+                });
+            }
 
             document.querySelectorAll('.upload-trigger').forEach(el => {
                 const openUploader = () => {
@@ -1234,6 +1468,9 @@ function renderLogin() {
                         <button data-subtab="extra_records" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'extra_records' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
                             <i class="fa-solid fa-cube"></i> Extra Records / Models
                         </button>
+                        <button data-subtab="timeline" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'timeline' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
+                            <i class="fa-solid fa-calendar-check"></i> Work Done / Appointments
+                        </button>
                         <button data-subtab="treatment_plan" class="subtab-btn px-4 py-3 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer ${appState.activeSubTab === 'treatment_plan' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-800'}">
                             <i class="fa-solid fa-file-prescription"></i> Treatment Plan & Notes
                         </button>
@@ -1380,6 +1617,85 @@ function renderLogin() {
                             ${isAdminViewingDoctor() ? '' : `<div class="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-sm font-semibold gap-2"> <i class="fa-solid fa-cloud-arrow-up text-xl"></i> Click to Upload Extra Records </div>`}
                         </div>
                         <div class="text-xs text-slate-600 font-medium">Record Details: ${ext.caption || 'Digital study models.'}</div>
+                    </div>
+                `;
+            } else if (appState.activeSubTab === 'timeline') {
+                const selectedDate = appState.selectedTimelineDate || localDateISO();
+                const entry = p.timeline?.[selectedDate] || {};
+                const nextAppointment = p.nextAppointmentDate || '';
+                const readonly = isAdminViewingDoctor();
+                const recentEntries = Object.values(p.timeline || {})
+                    .filter(x => x.workDone)
+                    .sort((a, b) => b.eventDate.localeCompare(a.eventDate))
+                    .slice(0, 10);
+
+                return `
+                    <div class="space-y-5">
+                        ${isAdminViewingDoctor() ? `
+                        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-700 flex items-center justify-between">
+                            <span><i class="fa-solid fa-eye mr-2"></i> Work timeline is shown in read-only administrator view.</span>
+                            <span class="font-mono bg-slate-200 px-2 py-0.5 rounded">ADMIN VIEW</span>
+                        </div>` : ''}
+
+                        <div class="grid grid-cols-1 xl:grid-cols-5 gap-5">
+                            <div class="xl:col-span-3">
+                                ${buildTimelineCalendar(p)}
+                            </div>
+
+                            <div class="xl:col-span-2 space-y-5">
+                                <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-5">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div>
+                                            <h3 class="font-bold text-slate-800 text-base">${humanDate(selectedDate)}</h3>
+                                            <p class="text-xs text-slate-500 mt-0.5">Record what you did for the patient today.</p>
+                                        </div>
+                                        ${selectedDate === localDateISO() ? `<span class="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold uppercase">Today</span>` : ''}
+                                    </div>
+                                    <textarea id="timeline-work-done" rows="10" ${readonly ? 'readonly' : ''}
+                                        class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all resize-y custom-scrollbar"
+                                        placeholder="e.g. Bonded upper and lower brackets. Placed 0.014 NiTi archwire...">${escapeHtml(entry.workDone || '')}</textarea>
+                                    <div class="mt-3 flex justify-end">
+                                        ${readonly ? `<span class="text-xs font-semibold text-slate-400"><i class="fa-solid fa-eye mr-1.5"></i> Read-only</span>` : `<button id="btn-save-timeline-entry" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer"><i class="fa-solid fa-floppy-disk"></i><span>Save Work Done</span></button>`}
+                                    </div>
+                                </div>
+
+                                <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-5">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div>
+                                            <h3 class="font-bold text-slate-800 text-base"><i class="fa-solid fa-calendar-day text-rose-500 mr-2"></i>Next Appointment</h3>
+                                            <p class="text-xs text-slate-500 mt-0.5">Select the next visit; that date will appear red on the calendar.</p>
+                                        </div>
+                                    </div>
+                                    <input type="date" id="next-appointment-date" value="${nextAppointment}" ${readonly ? 'disabled' : ''}
+                                        class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:bg-white transition-all">
+                                    ${readonly ? `<div class="mt-3 text-xs font-semibold text-slate-400"><i class="fa-solid fa-eye mr-1.5"></i> Read-only administrator view</div>` : `<div class="mt-3 flex justify-end"><button id="btn-save-next-appointment" class="bg-rose-600 hover:bg-rose-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer"><i class="fa-solid fa-calendar-check"></i><span>Save Appointment</span></button></div>`}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-5">
+                            <div class="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 class="font-bold text-slate-800 text-base">Recent Work Done</h3>
+                                    <p class="text-xs text-slate-500 mt-0.5">Click a date to review that day's clinical note.</p>
+                                </div>
+                                <span class="text-xs text-slate-400">${recentEntries.length} entr${recentEntries.length === 1 ? 'y' : 'ies'}</span>
+                            </div>
+                            ${recentEntries.length ? `
+                            <div class="divide-y divide-slate-100">
+                                ${recentEntries.map(item => `
+                                    <button type="button" class="timeline-history-btn w-full text-left py-3 flex items-start justify-between gap-4 hover:bg-slate-50 rounded-xl px-2 cursor-pointer" data-date="${item.eventDate}">
+                                        <div class="min-w-0">
+                                            <div class="text-xs font-bold text-slate-700">${humanDate(item.eventDate)}</div>
+                                            <div class="text-sm text-slate-600 mt-1 whitespace-pre-wrap">${escapeHtml(item.workDone)}</div>
+                                        </div>
+                                        <i class="fa-solid fa-chevron-right text-slate-300 mt-1"></i>
+                                    </button>
+                                `).join('')}
+                            </div>` : `
+                            <div class="py-8 text-center text-sm text-slate-500">No work entries recorded yet. Select a date on the calendar and add today's work.</div>
+                            `}
+                        </div>
                     </div>
                 `;
             } else if (appState.activeSubTab === 'treatment_plan') {
