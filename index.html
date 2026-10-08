@@ -559,7 +559,9 @@
                 if (patientError) console.warn('Next appointment sync warning:', patientError.message);
                 patient.nextAppointmentDate = nextDate;
             }
-            return mapAppointmentRow(data);
+            const mapped = mapAppointmentRow(data);
+            upsertLocalAppointment(mapped);
+            return mapped;
         }
 
         async function syncNextAppointmentDateForPatient(patientId) {
@@ -755,6 +757,124 @@
             return (appState.appointments || [])
                 .filter(a => a.appointmentDate === date)
                 .sort((a, b) => appointmentDateTimeKey(a).localeCompare(appointmentDateTimeKey(b)));
+        }
+
+        function getPatientAppointmentsForDate(patientId, date) {
+            return getAppointmentsForDate(date).filter(a => a.patientId === patientId);
+        }
+
+        function upsertLocalAppointment(appointment) {
+            if (!appointment?.id) return;
+            const index = appState.appointments.findIndex(a => a.id === appointment.id);
+            if (index >= 0) appState.appointments[index] = appointment;
+            else appState.appointments.push(appointment);
+            appState.appointments.sort((a, b) => appointmentDateTimeKey(a).localeCompare(appointmentDateTimeKey(b)));
+        }
+
+        async function ensureVisitAppointmentForPatientDate(patient, date, options = {}) {
+            if (!patient?.id || !date || isAdminViewingDoctor()) {
+                throw new Error('Administrator view is read-only.');
+            }
+            const ownerId = patient.ownerId || appState.user?.id;
+            if (!ownerId) throw new Error('Doctor ownership could not be determined.');
+
+            const workDone = options.workDone !== undefined ? String(options.workDone || '').trim() : undefined;
+            const status = options.status || 'completed';
+            const time = options.time || '';
+            const plannedWork = String(options.plannedWork || '').trim();
+            const notes = String(options.notes || '').trim();
+
+            const existing = getPatientAppointmentsForDate(patient.id, date)[0] || null;
+            if (existing) {
+                const patch = { updated_at: new Date().toISOString() };
+                if (workDone !== undefined) patch.work_done = workDone;
+                if (time && !existing.appointmentTime) patch.appointment_time = time;
+                if (status && !['cancelled', 'declined'].includes(existing.status)) patch.status = status;
+                if (plannedWork && !existing.plannedWork) patch.planned_work = plannedWork;
+                if (notes) patch.notes = existing.notes ? `${existing.notes} ${notes}` : notes;
+
+                const { data, error } = await supabaseClient
+                    .from('appointments')
+                    .update(patch)
+                    .eq('id', existing.id)
+                    .eq('owner_id', ownerId)
+                    .select('*')
+                    .single();
+                if (error) throw error;
+                const mapped = mapAppointmentRow(data);
+                upsertLocalAppointment(mapped);
+                return mapped;
+            }
+
+            const payload = {
+                owner_id: ownerId,
+                patient_id: patient.id,
+                appointment_date: date,
+                appointment_time: time || null,
+                status,
+                planned_work: plannedWork,
+                work_done: workDone || '',
+                notes: notes || 'Visit recorded from patient record.'
+            };
+            const { data, error } = await supabaseClient
+                .from('appointments')
+                .insert(payload)
+                .select('*')
+                .single();
+            if (error) throw error;
+            const mapped = mapAppointmentRow(data);
+            upsertLocalAppointment(mapped);
+            return mapped;
+        }
+
+        async function ensureNextAppointmentRecord(patient, date, time = '') {
+            if (!patient?.id || !date || isAdminViewingDoctor()) throw new Error('Administrator view is read-only.');
+            if (date < localDateISO()) throw new Error('Next appointment date cannot be in the past.');
+            const ownerId = patient.ownerId || appState.user?.id;
+            if (!ownerId) throw new Error('Doctor ownership could not be determined.');
+
+            const existing = getPatientAppointmentsForDate(patient.id, date)
+                .filter(a => !['cancelled', 'declined', 'no_show', 'rescheduled'].includes(a.status))[0] || null;
+
+            let appointment;
+            if (existing) {
+                const patch = { updated_at: new Date().toISOString() };
+                if (time) patch.appointment_time = time;
+                if (['requested'].includes(existing.status)) {
+                    // Keep patient-originated requests waiting for doctor approval.
+                } else if (!['confirmed'].includes(existing.status)) {
+                    patch.status = 'scheduled';
+                }
+                const { data, error } = await supabaseClient
+                    .from('appointments')
+                    .update(patch)
+                    .eq('id', existing.id)
+                    .eq('owner_id', ownerId)
+                    .select('*')
+                    .single();
+                if (error) throw error;
+                appointment = mapAppointmentRow(data);
+            } else {
+                const { data, error } = await supabaseClient
+                    .from('appointments')
+                    .insert({
+                        owner_id: ownerId,
+                        patient_id: patient.id,
+                        appointment_date: date,
+                        appointment_time: time || null,
+                        status: 'scheduled',
+                        planned_work: '',
+                        work_done: '',
+                        notes: 'Next appointment scheduled from patient record.'
+                    })
+                    .select('*')
+                    .single();
+                if (error) throw error;
+                appointment = mapAppointmentRow(data);
+            }
+
+            upsertLocalAppointment(appointment);
+            return appointment;
         }
 
         function buildAppointmentCalendar(year, month) {
@@ -1169,11 +1289,24 @@
         }
 
         async function saveTimelineEntryToCloud(patient, eventDate, workDone) {
+            if (!patient?.id || isAdminViewingDoctor()) throw new Error('Administrator view is read-only.');
+            if (!eventDate) throw new Error('Please choose a visit date.');
+            if (eventDate > localDateISO()) throw new Error('Work done can only be recorded for today or a previous date.');
+            const trimmedWork = String(workDone || '').trim();
+            if (!trimmedWork) throw new Error('Please enter the work done before saving.');
+
+            const appointment = await ensureVisitAppointmentForPatientDate(patient, eventDate, {
+                status: 'completed',
+                workDone: trimmedWork,
+                notes: 'Visit created/updated from Work Done timeline.'
+            });
+
             const payload = {
-                owner_id: patient.ownerId || (isAdminViewingDoctor() ? appState.viewingDoctorId : appState.user.id),
+                owner_id: patient.ownerId || appState.user.id,
                 patient_id: patient.id,
                 event_date: eventDate,
-                work_done: workDone.trim()
+                appointment_id: appointment.id,
+                work_done: trimmedWork
             };
             const { data, error } = await supabaseClient
                 .from('patient_timeline')
@@ -1184,14 +1317,31 @@
             patient.timeline[eventDate] = {
                 id: data.id,
                 eventDate: data.event_date,
-                appointmentId: data.appointment_id || '',
+                appointmentId: data.appointment_id || appointment.id,
                 workDone: data.work_done || '',
                 createdAt: data.created_at || '',
                 updatedAt: data.updated_at || ''
             };
+
+            if (eventDate <= localDateISO()) {
+                const { error: visitError } = await supabaseClient
+                    .from('patients')
+                    .update({ last_visit: eventDate, updated_at: new Date().toISOString() })
+                    .eq('id', patient.id);
+                if (visitError) console.warn('Last visit sync warning:', visitError.message);
+                patient.lastVisit = eventDate;
+            }
+            await syncNextAppointmentDateForPatient(patient.id);
         }
 
-        async function saveNextAppointmentToCloud(patient, date) {
+        async function saveNextAppointmentToCloud(patient, date, time = '') {
+            if (!patient?.id || isAdminViewingDoctor()) throw new Error('Administrator view is read-only.');
+            if (date && date < localDateISO()) throw new Error('Next appointment date cannot be in the past.');
+
+            if (date) {
+                await ensureNextAppointmentRecord(patient, date, time);
+            }
+
             const { data, error } = await supabaseClient
                 .from('patients')
                 .update({ next_appointment_date: date || null, updated_at: new Date().toISOString() })
@@ -1200,6 +1350,36 @@
                 .single();
             if (error) throw error;
             patient.nextAppointmentDate = data.next_appointment_date || '';
+            if (!date) return;
+
+            // Refresh the owner's appointment list so the main scheduler and patient view stay identical.
+            await loadAppointmentsForOwner(patient.ownerId || appState.user.id);
+        }
+
+        async function savePatientPaymentForDate(patient, date, rawAmount) {
+            if (!patient?.id || isAdminViewingDoctor()) throw new Error('Administrator view is read-only.');
+            if (!date) throw new Error('Please choose a payment date.');
+            if (date > localDateISO()) throw new Error('Payment can only be recorded for today or a previous date.');
+            const amountText = String(rawAmount ?? '').trim();
+            const amount = amountText === '' ? 0 : Number(amountText);
+            if (!Number.isFinite(amount) || amount < 0) throw new Error('Please enter a valid payment amount in rupees.');
+
+            let appointment = getPatientAppointmentsForDate(patient.id, date)[0] || null;
+            if (!appointment && amount > 0) {
+                appointment = await ensureVisitAppointmentForPatientDate(patient, date, {
+                    status: 'completed',
+                    workDone: patient.timeline?.[date]?.workDone || '',
+                    notes: 'Visit created from patient payment entry.'
+                });
+            }
+            if (!appointment) {
+                throw new Error('There is no visit/appointment on this date to attach this payment to.');
+            }
+
+            await savePaymentInCloud(appointment, amount);
+            await loadPaymentsForPatient(patient.id);
+            await loadAppointmentsForOwner(patient.ownerId || appState.user.id);
+            await syncNextAppointmentDateForPatient(patient.id);
         }
 
 
@@ -1668,7 +1848,7 @@
                     appState.booting = true;
                     render();
                     try {
-                        await Promise.all([loadTimelineForPatient(id), loadPaymentsForPatient(id)]);
+                        await Promise.all([loadTimelineForPatient(id), loadPaymentsForPatient(id), loadAppointmentsForOwner(appState.user?.id || appState.viewingDoctorId)]);
                     } catch (error) {
                         console.error(error);
                         showToast(`Unable to load work timeline: ${error.message || 'Unknown error'}`, 'error');
@@ -1788,7 +1968,7 @@
                     appState.booting = true;
                     render();
                     try {
-                        await Promise.all([loadTimelineForPatient(patientId), loadPaymentsForPatient(patientId)]);
+                        await Promise.all([loadTimelineForPatient(patientId), loadPaymentsForPatient(patientId), loadAppointmentsForOwner(appState.user?.id || appState.viewingDoctorId)]);
                     } catch (error) {
                         console.error(error);
                         showToast(`Unable to load patient timeline: ${error.message || 'Unknown error'}`, 'error');
@@ -1812,7 +1992,7 @@
                     appState.booting = true;
                     render();
                     try {
-                        await Promise.all([loadTimelineForPatient(patientId), loadPaymentsForPatient(patientId)]);
+                        await Promise.all([loadTimelineForPatient(patientId), loadPaymentsForPatient(patientId), loadAppointmentsForOwner(appState.user?.id || appState.viewingDoctorId)]);
                     } catch (error) {
                         console.error(error);
                         showToast(`Unable to load work timeline: ${error.message || 'Unknown error'}`, 'error');
@@ -2045,11 +2225,12 @@
                 if (!isAdminViewingDoctor()) document.getElementById('btn-save-next-appointment')?.addEventListener('click', async (e) => {
                     const p = appState.patients.find(x => x.id === appState.selectedPatientId);
                     const date = document.getElementById('next-appointment-date')?.value || '';
+                    const time = document.getElementById('next-appointment-time')?.value || '';
                     const btn = e.currentTarget;
                     if (!p) return;
                     btn.disabled = true;
                     try {
-                        await saveNextAppointmentToCloud(p, date);
+                        await saveNextAppointmentToCloud(p, date, time);
                         showToast(date ? `Next appointment set for ${humanDate(date)}.` : 'Next appointment cleared.');
                         setTimelineMonthTo(date || appState.selectedTimelineDate || localDateISO());
                         render();
@@ -2057,6 +2238,26 @@
                         console.error(error);
                         showToast(`Appointment could not be saved: ${error.message || 'Unknown error'}`, 'error');
                         btn.disabled = false;
+                    }
+                });
+
+                if (!isAdminViewingDoctor()) document.getElementById('btn-save-patient-date-payment')?.addEventListener('click', async (e) => {
+                    const p = appState.patients.find(x => x.id === appState.selectedPatientId);
+                    const amount = document.getElementById('patient-date-payment')?.value || '';
+                    const btn = e.currentTarget;
+                    if (!p) return;
+                    btn.disabled = true;
+                    const old = btn.innerHTML;
+                    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Saving…</span>';
+                    try {
+                        await savePatientPaymentForDate(p, appState.selectedTimelineDate || localDateISO(), amount);
+                        showToast('Payment saved successfully.');
+                        render();
+                    } catch (error) {
+                        console.error(error);
+                        showToast(`Payment could not be saved: ${error.message || 'Unknown error'}`, 'error');
+                        btn.disabled = false;
+                        btn.innerHTML = old;
                     }
                 });
             }
@@ -2147,8 +2348,7 @@
                         plannedWork: document.getElementById('appointment-planned-work')?.value || '',
                         notes: document.getElementById('appointment-notes')?.value || ''
                     });
-                    appState.appointments.push(appointment);
-                    appState.appointments.sort((a,b) => appointmentDateTimeKey(a).localeCompare(appointmentDateTimeKey(b)));
+                    upsertLocalAppointment(appointment);
                     appState.selectedAppointmentDate = appointment.appointmentDate;
                     const appointmentDate = new Date(`${appointment.appointmentDate}T00:00:00`);
                     appState.appointmentYear = appointmentDate.getFullYear();
@@ -3088,6 +3288,9 @@ function renderLogin() {
                 const selectedDate = appState.selectedTimelineDate || localDateISO();
                 const entry = p.timeline?.[selectedDate] || {};
                 const nextAppointment = p.nextAppointmentDate || '';
+                const nextAppointmentTime = nextAppointment
+                    ? (getPatientAppointmentsForDate(p.id, nextAppointment).find(a => !['cancelled','declined','no_show','rescheduled'].includes(a.status))?.appointmentTime || '')
+                    : '';
                 const readonly = isAdminViewingDoctor();
                 const recentEntries = Object.values(p.timeline || {})
                     .filter(x => x.workDone)
@@ -3141,6 +3344,27 @@ function renderLogin() {
                             }).join('')}</div>` : `<div class="py-5 text-center text-sm text-slate-400">No appointment recorded on this date.</div>`}
                         </div>
 
+                        <div class="bg-white rounded-2xl border border-slate-200 shadow-xs p-5">
+                            <div class="flex items-center justify-between gap-3 mb-3">
+                                <div>
+                                    <h3 class="font-bold text-slate-800 text-base"><i class="fa-solid fa-indian-rupee-sign text-emerald-600 mr-2"></i>Payment on ${humanDate(selectedDate)}</h3>
+                                    <p class="text-xs text-slate-500 mt-0.5">Enter the amount received for this visit. It is linked to the appointment for this date and added to the patient's total paid.</p>
+                                </div>
+                                <div class="text-right">
+                                    <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Patient Total Paid</div>
+                                    <div class="text-lg font-bold text-emerald-700">${escapeHtml(formatINR(totalPaidForPatient(p.id)))}</div>
+                                </div>
+                            </div>
+                            <div class="flex flex-col sm:flex-row gap-3 items-end">
+                                <div class="flex-1 w-full sm:max-w-xs">
+                                    <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Amount Received (₹)</label>
+                                    <input type="number" id="patient-date-payment" min="0" step="0.01" inputmode="decimal" value="${selectedDayAppointments[0] && paymentForAppointment(selectedDayAppointments[0].id) ? escapeHtml(String(paymentForAppointment(selectedDayAppointments[0].id).amount)) : ''}" ${readonly ? 'readonly' : ''} placeholder="e.g. 500 or 3000"
+                                        class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all">
+                                </div>
+                                ${readonly ? `<span class="text-xs font-semibold text-slate-400 pb-3"><i class="fa-solid fa-eye mr-1.5"></i> Read-only</span>` : `<button id="btn-save-patient-date-payment" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-3 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer"><i class="fa-solid fa-indian-rupee-sign"></i><span>Save Payment</span></button>`}
+                            </div>
+                        </div>
+
                         <div class="grid grid-cols-1 xl:grid-cols-5 gap-5">
                             <div class="xl:col-span-3">
                                 ${buildTimelineCalendar(p)}
@@ -3167,11 +3391,21 @@ function renderLogin() {
                                     <div class="flex items-center justify-between mb-3">
                                         <div>
                                             <h3 class="font-bold text-slate-800 text-base"><i class="fa-solid fa-calendar-day text-rose-500 mr-2"></i>Next Appointment</h3>
-                                            <p class="text-xs text-slate-500 mt-0.5">Select the next visit; that date will appear red on the calendar.</p>
+                                            <p class="text-xs text-slate-500 mt-0.5">Select the next visit; it will also appear in the main Appointment Scheduler.</p>
                                         </div>
                                     </div>
-                                    <input type="date" id="next-appointment-date" value="${nextAppointment}" ${readonly ? 'disabled' : ''}
-                                        class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:bg-white transition-all">
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Date</label>
+                                            <input type="date" id="next-appointment-date" value="${nextAppointment}" ${readonly ? 'disabled' : ''}
+                                                class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:bg-white transition-all">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Time (optional)</label>
+                                            <input type="time" id="next-appointment-time" value="${escapeHtml(nextAppointmentTime)}" ${readonly ? 'disabled' : ''}
+                                                class="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-400 focus:bg-white transition-all">
+                                        </div>
+                                    </div>
                                     ${readonly ? `<div class="mt-3 text-xs font-semibold text-slate-400"><i class="fa-solid fa-eye mr-1.5"></i> Read-only administrator view</div>` : `<div class="mt-3 flex justify-end"><button id="btn-save-next-appointment" class="bg-rose-600 hover:bg-rose-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-md transition-all flex items-center gap-2 cursor-pointer"><i class="fa-solid fa-calendar-check"></i><span>Save Appointment</span></button></div>`}
                                 </div>
                             </div>
