@@ -50,8 +50,8 @@
         .case-sheet-inference.blank-selected { color: transparent; }
         .case-sheet-inference.blank-selected option { color: #111827; }
         @media print {
-            /* Punch-hole safe print layout: wider blank margin on the LEFT, matching the supplied paper-form style. */
-            @page { size: auto; margin: 12mm 12mm 12mm 25mm; }
+            /* Punch-hole safe print layout: left edge matches the supplied A4 form spacing (~31-32 mm to printed content). */
+            @page { size: A4 portrait; margin: 18mm 11mm 18mm 28mm; }
             body { margin: 0 !important; background: #fff !important; }
             body * { visibility: hidden !important; }
             .case-sheet-print-root, .case-sheet-print-root * { visibility: visible !important; }
