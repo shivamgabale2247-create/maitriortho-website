@@ -38,11 +38,14 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     
-        .case-sheet-table { border-collapse: collapse; width: 100%; }
-        .case-sheet-table th, .case-sheet-table td { border: 1px solid #cbd5e1; padding: 0.45rem 0.55rem; vertical-align: top; }
-        .case-sheet-table th { background: #e2e8f0; color: #0f172a; font-weight: 700; }
-        .case-sheet-section-title { background: #dbeafe; color: #0f172a; border: 1px solid #bfdbfe; padding: 0.55rem 0.7rem; font-weight: 800; letter-spacing: 0.02em; }
+        .case-sheet-table { border-collapse: collapse; width: 100%; background: #fff; }
+        .case-sheet-table th, .case-sheet-table td { border: 1px solid #1f2937; padding: 0.42rem 0.5rem; vertical-align: top; }
+        .case-sheet-table th { background: #f3f4f6; color: #111827; font-weight: 700; text-align: center; }
+        .case-sheet-section-title { background: #fff; color: #111827; border: 2px solid #111827; border-bottom: 0; padding: 0.45rem 0.55rem; font-weight: 800; letter-spacing: 0.01em; text-transform: uppercase; }
         .case-sheet-note { font-size: 11px; color: #475569; }
+        .case-sheet-paper { background: #fff; border: 1px solid #cbd5e1; box-shadow: 0 1px 3px rgba(15,23,42,.06); }
+        .case-sheet-paper input, .case-sheet-paper select, .case-sheet-paper textarea { background: #fff; }
+        .case-sheet-paper .plain-label { font-weight: 600; }
         .case-sheet-print-root { background: white; }
         @media print {
             @page { size: A4; margin: 12mm; }
@@ -111,6 +114,7 @@
             payments: [],
             rescheduleAppointmentId: null,
             activeCaseSheet: 'case_history',
+            caseCephSection: 'analyses',
             caseSheetLoading: false
         };
 
@@ -246,7 +250,7 @@
                 treatmentPlan: row.treatment_plan || '',
                 nextAppointmentDate: row.next_appointment_date || '',
                 timeline: {},
-                caseSheets: { case_history: {}, model_analysis: {}, diagnosis_plan: {} },
+                caseSheets: { case_history: {}, model_analysis: {}, cephalometric_analysis: {}, diagnosis_plan: {} },
                 stages: emptyStages()
             };
         }
@@ -3000,693 +3004,298 @@ function renderLogin() {
 
 
 
+
         // ------------------------------------------------------------------
-        // CASE SHEETS — literature-locked clinician-entry workflow
+        // CASE SHEETS — digitized source-form workflow
         // ------------------------------------------------------------------
+        // The supplied forms are preserved as the source-of-truth for wording,
+        // sequence and table structure. The clinician types the patient value
+        // and selects an inference from a source-based dropdown. No AI diagnosis.
         const CASE_SHEET_TYPES = {
-            case_history: { label: 'Case History', icon: 'fa-notes-medical', desc: 'Structured case history and clinical examination record.' },
-            model_analysis: { label: 'Model Analysis', icon: 'fa-cubes-stacked', desc: 'Study-model measurements, arch analysis, space analysis and cephalometric analysis.' },
-            diagnosis_plan: { label: 'Diagnosis & Treatment Planning', icon: 'fa-file-prescription', desc: 'Diagnosis, objectives, treatment plan, anchorage, retention and prognosis.' }
+            case_history: { label: 'Case History', icon: 'fa-notes-medical', desc: 'Original case history and clinical examination sheet.' },
+            model_analysis: { label: 'Model Analysis', icon: 'fa-cubes-stacked', desc: 'Original study-model, arch-width, tooth-size and space-analysis sheets.' },
+            cephalometric_analysis: { label: 'Cephalometric Analysis', icon: 'fa-x-ray', desc: 'Original radiographic, CVM, cephalometric and composite cephalometric sheets.' },
+            diagnosis_plan: { label: 'Diagnosis & Treatment Planning', icon: 'fa-file-prescription', desc: 'Original diagnosis, treatment planning, payment, treatment record and synopsis.' }
         };
 
         const INFERENCE_OPTIONS = {
-            normal: ['Within reference range', 'Above reference / increased', 'Below reference / decreased', 'Other / clinician wording'],
+            neutral: ['Within reference range', 'Above reference / increased', 'Below reference / decreased', 'Other / clinician wording'],
             relation: ['Class I relationship', 'Class II relationship', 'Class III relationship', 'Other / clinician wording'],
             overjet: ['Within expected range', 'Increased overjet', 'Reduced overjet', 'Reverse overjet', 'Edge-to-edge', 'Other / clinician wording'],
-            overbite: ['Within expected range', 'Increased / deep overbite', 'Reduced overbite / open bite', 'Edge-to-edge', 'Other / clinician wording'],
+            overbite: ['Within expected range', 'Increased / deep overbite', 'Reduced / open bite', 'Edge-to-edge', 'Other / clinician wording'],
             transverse: ['Normal transverse relation', 'Anterior crossbite', 'Posterior crossbite', 'Bilateral crossbite', 'Scissor bite', 'Other / clinician wording'],
             midline: ['Coincident / no significant deviation', 'Upper dental midline shifted right', 'Upper dental midline shifted left', 'Lower dental midline shifted right', 'Lower dental midline shifted left', 'Other / clinician wording'],
-            symmetry: ['Symmetric', 'Right side greater than left', 'Left side greater than right', 'Asymmetric / irregular', 'Other / clinician wording'],
+            symmetry: ['Symmetric', 'Right greater than left', 'Left greater than right', 'Asymmetric / irregular', 'Other / clinician wording'],
             space: ['No significant discrepancy', 'Space deficiency / crowding', 'Space excess / spacing', 'Other / clinician wording'],
-            arch_discrepancy: ['Calculated width exceeds measured width — expansion indicated', 'Measured width approximates calculated width — no significant discrepancy', 'Measured width exceeds calculated width — wider than predicted', 'Other / clinician wording'],
-            howe_pmd: ['PMBAW > PMD — basal arch is sufficient to allow expansion', 'PMD > PMBAW — maxillary expansion is not indicated by this relationship', 'Other / clinician wording'],
-            howe_percent: ['PMBAW% ≤37% — extraction treatment indicated by Howe criterion', 'PMBAW% 37–44% — borderline case', 'PMBAW% >44% — non-extraction treatment indicated by Howe criterion', 'Other / clinician wording'],
-            bolton_overall: ['Relative maxillary tooth-material excess', 'No significant overall tooth-size discrepancy', 'Relative mandibular tooth-material excess', 'Other / clinician wording'],
-            bolton_anterior: ['Relative maxillary anterior tooth-material excess', 'No significant anterior tooth-size discrepancy', 'Relative mandibular anterior tooth-material excess', 'Other / clinician wording'],
-            growth_vertical: ['Average / normodivergent tendency', 'Vertical / hyperdivergent tendency', 'Horizontal / hypodivergent tendency', 'Other / clinician wording'],
+            arch_width: ['Calculated value exceeds actual value — relative transverse deficiency', 'Actual value approximates calculated value — no significant discrepancy', 'Actual value exceeds calculated value — wider than calculated', 'Other / clinician wording'],
+            howe_pmd: ['PMBAW > PMD — basal arch is sufficient relative to total tooth material', 'PMD > PMBAW — basal arch is insufficient relative to total tooth material', 'Other / clinician wording'],
+            howe_pct: ['PMBAW% ≤37% — extraction indicated by Howe criterion', 'PMBAW% 37–44% — borderline by Howe criterion', 'PMBAW% >44% — non-extraction indicated by Howe criterion', 'Other / clinician wording'],
+            bolton: ['Relative maxillary tooth-material excess', 'No significant tooth-size discrepancy', 'Relative mandibular tooth-material excess', 'Other / clinician wording'],
+            growth: ['Average / normodivergent tendency', 'Vertical / hyperdivergent tendency', 'Horizontal / hypodivergent tendency', 'Other / clinician wording'],
             maxilla: ['Maxilla within reference position', 'Maxilla positioned anteriorly / prognathic relative to reference', 'Maxilla positioned posteriorly / retrusive relative to reference', 'Other / clinician wording'],
             mandible: ['Mandible within reference position', 'Mandible positioned anteriorly / prognathic relative to reference', 'Mandible positioned posteriorly / retrusive relative to reference', 'Other / clinician wording'],
-            sagittal_class: ['Skeletal Class I tendency', 'Skeletal Class II tendency', 'Skeletal Class III tendency', 'Indeterminate / correlate with other measures', 'Other / clinician wording'],
+            sagittal: ['Sagittal skeletal relationship within reference', 'Skeletal Class II tendency', 'Skeletal Class III tendency', 'Indeterminate / correlate with other measures', 'Other / clinician wording'],
             incisor: ['Within reference inclination / position', 'Proclined / protruded', 'Retroclined / retruded', 'Other / clinician wording'],
-            lip: ['Within reference / harmonious', 'Protrusive / increased', 'Retrusive / decreased', 'Other / clinician wording'],
-            profile: ['Straight / balanced relative to reference', 'More convex', 'More concave', 'Other / clinician wording'],
-            positive_negative: ['Within reference', 'More positive / increased', 'More negative / decreased', 'Other / clinician wording'],
-            rotation: ['Average / neutral rotation', 'Anterior rotation tendency', 'Posterior rotation tendency', 'Other / clinician wording'],
-            wits: ['Within the normal reference relationship', 'Positive Wits — skeletal Class II tendency', 'Negative Wits — skeletal Class III tendency', 'Other / clinician wording'],
+            soft_tissue: ['Within reference / harmonious', 'Increased / protrusive', 'Reduced / retrusive', 'Other / clinician wording'],
+            profile: ['Within reference / straight-balanced', 'More convex', 'More concave', 'Other / clinician wording'],
+            wits: ['Within the normal reference relationship', 'Positive Wits — Class II tendency', 'Negative Wits — Class III tendency', 'Other / clinician wording'],
             fma: ['Average / approximately 25°', 'High FMA — vertical / hyperdivergent tendency', 'Low FMA — horizontal / hypodivergent tendency', 'Other / clinician wording'],
             jarabak: ['62–65% — average growth pattern', '<62% — vertical / hyperdivergent growth pattern', '>65% — horizontal / hypodivergent growth pattern', 'Other / clinician wording'],
-            jarabak_sum: ['390–402° — neutral / average rotation', '<390° — anterior rotation tendency', '>402° — posterior rotation tendency', 'Other / clinician wording'],
-            ricketts_facial_axis: ['Around 90° — average/neutral', '>90° — anterior rotation tendency', '<90° — posterior rotation tendency', 'Other / clinician wording'],
-            ricketts_convexity: ['Within age-adjusted reference', 'Increased convexity — Class II tendency', 'Reduced/negative convexity — Class III tendency', 'Other / clinician wording'],
-            airway: ['Within reference width', 'Increased / wider airway', 'Reduced / narrower airway', 'Other / clinician wording']
+            jarabak_sum: ['396±6° / average relationship', 'Reduced sum — anterior rotation tendency', 'Increased sum — posterior rotation tendency', 'Other / clinician wording'],
+            ricketts_axis: ['Around 90° — average / neutral', '>90° — anterior rotation tendency', '<90° — posterior rotation tendency', 'Other / clinician wording'],
+            ricketts_convexity: ['Within age-adjusted reference', 'Increased convexity — Class II tendency', 'Reduced / negative convexity — Class III tendency', 'Other / clinician wording'],
+            airway: ['Within reference width', 'Wider airway', 'Narrower airway', 'Other / clinician wording'],
+            cvm: ['Cervical stage 1 — Initiation', 'Cervical stage 2 — Acceleration', 'Cervical stage 3 — Transition', 'Cervical stage 4 — Deceleration', 'Cervical stage 5 — Maturation', 'Cervical stage 6 — Completion', 'Other / clinician wording']
         };
 
         const MODEL_ANALYSIS_SECTIONS = [
-            {
-                title: 'Models in Occlusion & Initial Findings',
-                source: 'Model analysis form supplied by the clinician',
-                rows: [
-                    ['canine_right', 'Canine relation — Right', '', 'relation'],
-                    ['canine_left', 'Canine relation — Left', '', 'relation'],
-                    ['molar_right', 'Molar relation — Right', '', 'relation'],
-                    ['molar_left', 'Molar relation — Left', '', 'relation'],
-                    ['overjet', 'Overjet', 'mm', 'overjet'],
-                    ['overbite', 'Overbite', 'mm / %', 'overbite'],
-                    ['transverse_relation', 'Transverse relation / Crossbite', '', 'transverse'],
-                    ['midline', 'Dental midline difference', 'mm', 'midline']
-                ]
-            },
-            {
-                title: 'Maxillary Arch',
-                source: 'Supplied Model Analysis PDF',
-                rows: [
-                    ['mx_tooth_material', 'Tooth material {6–6}', 'mm', 'normal'],
-                    ['mx_sum_incisors', 'Sum of incisors {2–2}', 'mm', 'normal'],
-                    ['mx_proclination', 'Proclination', 'mm', 'normal'],
-                    ['mx_premolar_right', 'Arch symmetry — premolar, right', 'mm', 'symmetry'],
-                    ['mx_premolar_left', 'Arch symmetry — premolar, left', 'mm', 'symmetry'],
-                    ['mx_molar_right', 'Arch symmetry — molar, right', 'mm', 'symmetry'],
-                    ['mx_molar_left', 'Arch symmetry — molar, left', 'mm', 'symmetry'],
-                    ['mx_arch_perimeter', 'Measured arch perimeter', 'mm', 'space']
-                ]
-            },
-            {
-                title: 'Estimation of Arch Width',
-                source: 'Pont / Linder-Harth / Chaddha / Howe source framework',
-                rows: [
-                    ['pont_premolar', 'Pont index — premolar discrepancy', 'mm', 'arch_discrepancy'],
-                    ['pont_molar', 'Pont index — molar discrepancy', 'mm', 'arch_discrepancy'],
-                    ['linder_premolar', 'Linder-Harth — premolar discrepancy', 'mm', 'arch_discrepancy'],
-                    ['linder_molar', 'Linder-Harth — molar discrepancy', 'mm', 'arch_discrepancy'],
-                    ['chaddha_premolar', "Chaddha’s index — premolar discrepancy", 'mm', 'arch_discrepancy'],
-                    ['chaddha_molar', "Chaddha’s index — molar discrepancy", 'mm', 'arch_discrepancy'],
-                    ['howe_pmd_pmbaw', 'Ashley Howe — PMBAW compared with PMD', 'mm', 'howe_pmd'],
-                    ['howe_pmbaw_percent', 'Ashley Howe — PMBAW%', '%', 'howe_percent']
-                ]
-            },
-            {
-                title: 'Mandibular Arch',
-                source: 'Supplied Model Analysis PDF',
-                rows: [
-                    ['md_tooth_material', 'Tooth material {6–6}', 'mm', 'normal'],
-                    ['md_sum_incisors', 'Sum of incisors {2–2}', 'mm', 'normal'],
-                    ['md_proclination', 'Proclination', 'mm', 'normal'],
-                    ['curve_spee_right', 'Curve of Spee — Right', 'mm', 'normal'],
-                    ['curve_spee_left', 'Curve of Spee — Left', 'mm', 'normal'],
-                    ['nance_carey_discrepancy', 'Nance/Carey arch discrepancy', 'mm', 'space'],
-                    ['tomes_index', 'Tome’s index', 'ratio / mm', 'normal'],
-                    ['bolton_overall', 'Bolton — overall ratio', '%', 'bolton_overall'],
-                    ['bolton_anterior', 'Bolton — anterior ratio', '%', 'bolton_anterior']
-                ]
-            },
-            {
-                title: 'Space Analysis — Lower Arch',
-                source: 'Supplied Model Analysis PDF; inference limited to space discrepancy unless clinician selects a treatment-specific interpretation.',
-                rows: [
-                    ['lower_space_proclination', 'Space required — correct proclination', 'mm', 'space'],
-                    ['lower_space_rotation', 'Space required — correct rotation', 'mm', 'space'],
-                    ['lower_space_crowding', 'Space required — correct crowding', 'mm', 'space'],
-                    ['lower_space_spee', 'Space required — correct curve of Spee', 'mm', 'space'],
-                    ['lower_space_total_required', 'Total space required', 'mm', 'space'],
-                    ['lower_space_interdental', 'Space available — interdental spacing', 'mm', 'space'],
-                    ['lower_space_expansion', 'Space available — expansion', 'mm', 'space'],
-                    ['lower_space_distalization', 'Space available — distalization', 'mm', 'space'],
-                    ['lower_space_labialisation', 'Space available — labialisation of anteriors', 'mm', 'space'],
-                    ['lower_space_uprighting', 'Space available — uprighting of posteriors', 'mm', 'space'],
-                    ['lower_space_derotation', 'Space available — derotation of posterior teeth', 'mm', 'space'],
-                    ['lower_space_stripping', 'Space available — proximal stripping', 'mm', 'space'],
-                    ['lower_space_extraction', 'Space available — extraction', 'mm', 'space'],
-                    ['lower_space_total_available', 'Total space available', 'mm', 'space'],
-                    ['lower_space_inference', 'Lower arch final discrepancy', 'mm', 'space']
-                ]
-            },
-            {
-                title: 'Space Analysis — Upper Arch',
-                source: 'Supplied Model Analysis PDF',
-                rows: [
-                    ['upper_space_proclination', 'Space required — correct proclination', 'mm', 'space'],
-                    ['upper_space_rotation', 'Space required — correct rotation', 'mm', 'space'],
-                    ['upper_space_crowding', 'Space required — correct crowding', 'mm', 'space'],
-                    ['upper_space_total_required', 'Total space required', 'mm', 'space'],
-                    ['upper_space_interdental', 'Space available — interdental spacing', 'mm', 'space'],
-                    ['upper_space_expansion', 'Space available — expansion', 'mm', 'space'],
-                    ['upper_space_distalization', 'Space available — distalization', 'mm', 'space'],
-                    ['upper_space_labialisation', 'Space available — labialisation of anteriors', 'mm', 'space'],
-                    ['upper_space_uprighting', 'Space available — uprighting of posteriors', 'mm', 'space'],
-                    ['upper_space_derotation', 'Space available — derotation of posterior teeth', 'mm', 'space'],
-                    ['upper_space_stripping', 'Space available — proximal stripping', 'mm', 'space'],
-                    ['upper_space_extraction', 'Space available — extraction', 'mm', 'space'],
-                    ['upper_space_total_available', 'Total space available', 'mm', 'space'],
-                    ['upper_space_inference', 'Upper arch final discrepancy', 'mm', 'space']
-                ]
-            }
+            { title: 'MODELS IN OCCLUSION', headers: ['RELATION','RIGHT','LEFT'], type: 'table', rows: [
+                ['canine','Canine'], ['molar','Molar']
+            ], footRows: [
+                ['overjet','OVERJET','mm','overjet'], ['overbite','OVERBITE','mm / %','overbite'], ['transverse','TRANSVERSE RELATION','', 'transverse'], ['midline','MIDLINES / DIFFERENCE BETWEEN UPPER & LOWER MIDLINE','mm','midline']
+            ], source: 'Supplied Model Analysis PDF, page 1.' },
+            { title: 'MAXILLARY ARCH — MESIO-DISTAL WIDTH', headers: ['TOOTH NUMBER','RIGHT','LEFT'], type: 'toothwidth', rows: [['1'],['2'],['3'],['4'],['5'],['6'],['7']], source: 'Supplied Model Analysis PDF, page 2.' },
+            { title: 'MAXILLARY ARCH — TOOTH MATERIAL / ARCH PERIMETER', headers: ['PARAMETER','PATIENT’S VALUE','NORMAL VALUE','DIFFERENCE','INFERENCE'], type: 'metrics', rows: [
+                ['mx_tooth_material','TOOTH MATERIAL {6-6}','91 mm','normal'], ['mx_sum_incisors','SUM OF INCISORS {2-2}','31.5 mm','normal'], ['mx_proclination','PROCLINATION','2 mm','normal'], ['mx_arch_perimeter','MEASURED ARCH PERIMETER / TOOTH MATERIAL {5–5}','', 'space']
+            ], source: 'Supplied Model Analysis PDF, page 2.' },
+            { title: 'MAXILLARY ARCH — ARCH SYMMETRY', headers: ['REGION','RIGHT','LEFT','DIFFERENCE','INFERENCE'], type: 'metrics2', rows: [
+                ['mx_sym_premolar','PREMOLAR',''], ['mx_sym_molar','MOLAR','']
+            ], source: 'Supplied Model Analysis PDF, page 2.' },
+            { title: 'ESTIMATION OF ARCH WIDTH', headers: ['REGION','ACTUAL','CALCULATED VALUE (CV)','DIFFERENCE','INFERENCE'], type: 'archindex', rows: [
+                ['pont_premolar','PONT’S INDEX — PREMOLAR','SI × 100/80 = CPV','arch_width'], ['pont_molar','PONT’S INDEX — MOLAR','SI × 100/64 = CMV','arch_width'],
+                ['linder_premolar','LINDER HARTH’S INDEX — PREMOLAR','SI × 100/85 = CPV','arch_width'], ['linder_molar','LINDER HARTH’S INDEX — MOLAR','SI × 100/64 = CMV','arch_width'],
+                ['chaddha_premolar','CHADDHA’S INDEX — PREMOLAR','SI ×100/83.7 = CPV','arch_width'], ['chaddha_molar','CHADDHA’S INDEX — MOLAR','SI×100/63.7 = CMV','arch_width'],
+                ['howe_pmbaw_pmd','ASHLEY HOWE — PMD / PMBAW','PMBAW ×100 / TOTAL TOOTH MATERIAL {6-6}','howe_pmd'], ['howe_pmbaw_pct','ASHLEY HOWE — PMBAW%','PMBAW × 100 / TOTAL TOOTH MATERIAL {6-6}','howe_pct']
+            ], source: 'Supplied Model Analysis PDF, page 3.' },
+            { title: 'MANDIBULAR ARCH — MESIO-DISTAL WIDTH', headers: ['TOOTH NUMBER','RIGHT','LEFT'], type: 'toothwidth_md', rows: [['1'],['2'],['3'],['4'],['5'],['6'],['7']], source: 'Supplied Model Analysis PDF, page 4.' },
+            { title: 'MANDIBULAR ARCH — TOOTH MATERIAL / CURVE OF SPEE', headers: ['PARAMETER','PATIENT’S VALUE','NORMAL VALUE','DIFFERENCE','INFERENCE'], type: 'metrics', rows: [
+                ['md_tooth_material','TOOTH MATERIAL {6-6}','84 mm','normal'], ['md_sum_incisors','SUM OF INCISORS {2-2}','24 mm','normal'], ['md_proclination','PROCLINATION','0 mm','normal'], ['curve_spee','CURVE OF SPEE — Rt / Lt / average','1.5 mm','normal']
+            ], source: 'Supplied Model Analysis PDF, page 4.' },
+            { title: 'MANDIBULAR ARCH — NANCE AND CAREY / TOOTH-SIZE', headers: ['PARAMETER','PATIENT / ACTUAL','CALCULATED / REFERENCE','DIFFERENCE','INFERENCE'], type: 'indexRows', rows: [
+                ['nance_carey','NANCE AND CAREY’S INDEX — measured arch perimeter / tooth material {5–5}','','','space'], ['tomes','TOME’S INDEX — measured sum of incisors of upper teeth','','','neutral'], ['bolton_overall','BOLTON — OVERALL RATIO','91.3%','','bolton'], ['bolton_anterior','BOLTON — ANTERIOR RATIO','77.2%','','bolton']
+            ], source: 'Supplied Model Analysis PDF, page 5.' },
+            { title: 'SPACE ANALYSIS — LOWER ARCH', headers: ['NO.','SPACE REQUIRED IN ARCH','IN MM'], type: 'spaceTable', rows: [
+                ['l_req_1','TO CORRECT PROCLINATION'],['l_req_2','TO CORRECT ROTATION'],['l_req_3','TO CORRECT CROWDING'],['l_req_4','TO CORRECT CURVE OF SPEE'],['l_req_total','TOTAL SPACE REQUIRED']
+            ], available: [
+                ['l_av_1','INTERDENTAL SPACING'],['l_av_2','EXPANSION'],['l_av_3','DISTALIZATION'],['l_av_4','LABIALLISATION OF ANTERIORS'],['l_av_5','UPRIGHTING OF POSTERIORS'],['l_av_6','DEROTATION OF POSTERIOR TEETH'],['l_av_7','PROXIMAL STRIPPING'],['l_av_8','EXTRACTION'],['l_av_total','TOTAL SPACE AVAILABLE']
+            ], source: 'Supplied Model Analysis PDF, page 6.' },
+            { title: 'SPACE ANALYSIS — UPPER ARCH', headers: ['NO.','SPACE REQUIRED IN ARCH','IN MM'], type: 'spaceTable', rows: [
+                ['u_req_1','TO CORRECT PROCLINATION'],['u_req_2','TO CORRECT ROTATION'],['u_req_3','TO CORRECT CROWDING'],['u_req_total','TOTAL SPACE REQUIRED']
+            ], available: [
+                ['u_av_1','INTERDENTAL SPACING'],['u_av_2','EXPANSION'],['u_av_3','DISTALIZATION'],['u_av_4','LABIALLISATION OF ANTERIORS'],['u_av_5','UPRIGHTING OF POSTERIORS'],['u_av_6','DEROTATION OF POSTERIOR TEETH'],['u_av_7','PROXIMAL STRIPPING'],['u_av_8','EXTRACTION'],['u_av_total','TOTAL SPACE AVAILABLE']
+            ], source: 'Supplied Model Analysis PDF, page 7.' }
         ];
 
         const CEPH_ANALYSES = [
-            {
-                id: 'downs', title: 'Downs Analysis', source: 'Downs WB. Variations in facial relationships; their significance in treatment and prognosis. Am J Orthod. 1948;34:812–840.',
-                rows: [
-                    ['downs_facial_angle', 'Facial Angle', '87.8° (82–95°)', '°, ' + 'skeletal'],
-                    ['downs_convexity', 'Angle of Convexity', '0° (−8.5 to +10°)', '°, ' + 'profile'],
-                    ['downs_ab_plane', 'A–B Plane Angle', '−4.6° (−9 to 0°)', '°, ' + 'positive_negative'],
-                    ['downs_mpa', 'Mandibular Plane Angle', '21.9° (17–28°)', '°, ' + 'growth_vertical'],
-                    ['downs_y_axis', 'Y-Axis', '59.4° (53–66°)', '°, ' + 'growth_vertical'],
-                    ['downs_occlusal_plane', 'Cant of Occlusal Plane', '9.3° (1.5–14°)', '°, ' + 'normal'],
-                    ['downs_interincisal', 'Interincisal Angle', '135.4° (130–150°)', '°, ' + 'incisor'],
-                    ['downs_li_occl', 'Lower Incisor to Occlusal Plane', '14.5° (3.5–20°)', '°, ' + 'incisor'],
-                    ['downs_li_mp', 'Lower Incisor to Mandibular Plane', '1.4° (−8.5 to +7°)', '°, ' + 'incisor'],
-                    ['downs_ui_apo', 'Upper Incisor to A-Pog Line', '2.7 mm (−1 to +5 mm)', 'mm, ' + 'incisor']
-                ]
-            },
-            {
-                id: 'steiner', title: 'Steiner Analysis', source: 'Steiner CC. Cephalometrics for you and me. Am J Orthod. 1953;39:729–755; Steiner CC. The use of cephalometrics as an aid to planning and assessing orthodontic treatment. Am J Orthod. 1960;46:721–735.',
-                rows: [
-                    ['steiner_sna', 'SNA', '82°', '°, ' + 'maxilla'],
-                    ['steiner_snb', 'SNB', '80°', '°, ' + 'mandible'],
-                    ['steiner_snd', 'SND', '76°', '°, ' + 'mandible'],
-                    ['steiner_anb', 'ANB', '2°', '°, ' + 'sagittal_class'],
-                    ['steiner_gogn_sn', 'Go-Gn to SN', '32°', '°, ' + 'growth_vertical'],
-                    ['steiner_u1_na_mm', 'U1 to N-A (mm)', '4 mm', 'mm, ' + 'incisor'],
-                    ['steiner_u1_na_ang', 'U1 to N-A (Angle)', '22°', '°, ' + 'incisor'],
-                    ['steiner_l1_nb_mm', 'L1 to N-B (mm)', '4 mm', 'mm, ' + 'incisor'],
-                    ['steiner_l1_nb_ang', 'L1 to N-B (Angle)', '25°', '°, ' + 'incisor'],
-                    ['steiner_pog_nb', 'Pog to N-B (mm)', 'Not fixed in supplied form', 'mm, ' + 'normal'],
-                    ['steiner_u1_l1', 'U1 to L1 (Angle)', 'Not fixed in supplied form', '°, ' + 'incisor'],
-                    ['steiner_occl_sn', 'Occl to S-N (Angle)', 'Not fixed in supplied form', '°, ' + 'normal'],
-                    ['steiner_s_line', '“S” Line', 'Touches both lips (supplied form)', 'mm, ' + 'lip']
-                ]
-            },
-            {
-                id: 'wits', title: 'Wits Appraisal', source: 'Jacobson A. The “Wits” appraisal of jaw disharmony. Am J Orthod. 1975;67:125–138.',
-                rows: [
-                    ['wits_reading', 'Wits appraisal', 'Female: AO≈BO; Male: BO≈1 mm ahead of AO', 'mm, ' + 'wits']
-                ]
-            },
-            {
-                id: 'tweed', title: 'Tweed Analysis', source: 'Tweed CH. The Frankfort-mandibular plane angle in orthodontic diagnosis, classification, treatment planning, and prognosis. Am J Orthod Oral Surg. 1946;32:175–230.',
-                rows: [
-                    ['tweed_fmpa', 'FMPA', '25°', '°, ' + 'fma'],
-                    ['tweed_fmia', 'FMIA', '65°', '°, ' + 'incisor'],
-                    ['tweed_impa', 'IMPA', '90°', '°, ' + 'incisor']
-                ]
-            },
-            {
-                id: 'soft_tissue', title: 'Soft Tissue Analysis', source: 'Supplied form combines classic profile references; Burton/soft-tissue items include Burstone/Legan concepts where applicable.',
-                rows: [
-                    ['soft_nasomental', 'Nasomental angle', '120–132°', '°, ' + 'profile'],
-                    ['soft_nasolabial', 'Nasolabial Angle', '102±4°', '°, ' + 'lip'],
-                    ['soft_ul_prominence', 'Upper lip prominence', '1–2 mm ahead', 'mm, ' + 'lip'],
-                    ['soft_ll_prominence', 'Lower lip prominence', '1 mm behind', 'mm, ' + 'lip'],
-                    ['soft_chin_prominence', 'Chin prominence', '−1 to −4 mm', 'mm, ' + 'normal'],
-                    ['soft_e_line_upper', 'E-Line — upper lip', '4 mm behind', 'mm, ' + 'lip'],
-                    ['soft_e_line_lower', 'E-Line — lower lip', '2 mm behind', 'mm, ' + 'lip'],
-                    ['soft_s_line', 'S-Line', 'Within source form', 'mm, ' + 'lip'],
-                    ['soft_b_line', 'B-Line', 'Source-dependent', 'mm, ' + 'lip'],
-                    ['soft_z_angle', 'Merrifield Z Angle', '70–80° (75–78°)', '°, ' + 'profile'],
-                    ['soft_chin_thickness', 'Soft Tissue Chin Thickness', '10–12 mm', 'mm, ' + 'normal']
-                ]
-            },
-            {
-                id: 'mcnamara', title: 'McNamara Analysis', source: 'McNamara JA Jr. A method of cephalometric evaluation. Am J Orthod. 1984;86:449–469.',
-                rows: [
-                    ['mc_a_np', 'N Perpendicular to A', '0 to +1 mm (source-dependent by age/sex)', 'mm, ' + 'maxilla'],
-                    ['mc_pog_np', 'N Perpendicular to Pogonion', '−4 to 0 mm (source-dependent by age/sex)', 'mm, ' + 'mandible'],
-                    ['mc_facial_axis', 'Facial axis angle', '0° in supplied form', '°, ' + 'growth_vertical'],
-                    ['mc_mpa', 'Mandibular plane angle', '22°–26°+4 in supplied form', '°, ' + 'growth_vertical'],
-                    ['mc_coa', 'Effective maxillary length (Co-A)', 'Age/sex dependent', 'mm, ' + 'maxilla'],
-                    ['mc_cogn', 'Effective mandibular length (Co-Gn)', 'Age/sex dependent', 'mm, ' + 'mandible'],
-                    ['mc_mmd', 'Maxillomandibular differential', '27–30 mm (adult supplied form)', 'mm, ' + 'sagittal_class'],
-                    ['mc_lafh', 'Lower anterior facial height', '65–67 mm (adult supplied form)', 'mm, ' + 'growth_vertical'],
-                    ['mc_u1_pta', 'U1 to Pt A distance', '4–6 mm', 'mm, ' + 'incisor'],
-                    ['mc_l1_apo', '1 to A-Po line distance', '1–3 mm', 'mm, ' + 'incisor'],
-                    ['mc_upper_airway', 'Upper airway', 'Source-dependent', 'mm, ' + 'airway'],
-                    ['mc_lower_airway', 'Lower airway', 'Source-dependent', 'mm, ' + 'airway']
-                ]
-            },
-            {
-                id: 'jarabak_ricketts', title: 'Rakosi-Jarabak / Ricketts Analysis', source: 'Supplied Model Analysis PDF; Ricketts source: Ricketts RM. A foundation for cephalometric communication. Am J Orthod. 1960;46:330–357.',
-                rows: [
-                    ['jar_saddle', 'Saddle Angle', '123±5°', '°, ' + 'normal'],
-                    ['jar_articular', 'Articular Angle', '143±6°', '°, ' + 'normal'],
-                    ['jar_gonial', 'Gonial Angle', '128±7°', '°, ' + 'normal'],
-                    ['jar_upper_gonial', 'Upper Gonial Angle', '52–55°', '°, ' + 'normal'],
-                    ['jar_lower_gonial', 'Lower Gonial Angle', '72–75°', '°, ' + 'growth_vertical'],
-                    ['jar_sum_post', 'Sum of Posterior Angles', '396±6°', '°, ' + 'jarabak_sum'],
-                    ['jar_mand_angle', 'Mandibular Angle', '32°', '°, ' + 'growth_vertical'],
-                    ['jar_inclination', 'Angle of Inclination', '85°', '°, ' + 'normal'],
-                    ['jar_pn_occl', 'Pn to Occlusal plane', '75°', '°, ' + 'normal'],
-                    ['jar_pn_mp', 'Pn to Mandibular Plane', '65°', '°, ' + 'normal'],
-                    ['jar_basal', 'Basal Plane Angle', '25°', '°, ' + 'growth_vertical'],
-                    ['jar_pal_occl', 'Palatal Plane to Occlusal Plane', '11°', '°, ' + 'normal'],
-                    ['jar_occl_mp', 'Occlusal Plane to MP', '14°', '°, ' + 'growth_vertical'],
-                    ['jar_pfh_afh', 'Posterior to Anterior Face Height Ratio', '62–65%', '% , ' + 'jarabak'],
-                    ['jar_y_axis', 'Y-Axis', '66°', '°, ' + 'growth_vertical'],
-                    ['jar_interincisal', 'Interincisal angle', '135°', '°, ' + 'incisor'],
-                    ['jar_u1_sn', 'U1 to SN plane', '102±2°', '°, ' + 'incisor'],
-                    ['jar_u1_pp', 'U1 to Palatal plane', '75±5°', '°, ' + 'incisor'],
-                    ['jar_l1_mp', 'L1 to Mandibular plane', '90±3°', '°, ' + 'incisor'],
-                    ['rick_facial_axis', 'Ricketts Facial Axis angle', '90±3.5°', '°, ' + 'ricketts_facial_axis'],
-                    ['rick_facial_depth', 'Ricketts Facial Depth', '87±3° (age adjusted)', '°, ' + 'mandible'],
-                    ['rick_mp_angle', 'Ricketts M.P. Angle', '26±4.5° (age adjusted)', '°, ' + 'growth_vertical'],
-                    ['rick_convexity', 'Ricketts Convexity of pt. A', '2±2 mm (age adjusted)', 'mm, ' + 'ricketts_convexity'],
-                    ['rick_l1_apo_ang', 'L1 to APO angle', '22°±4°', '°, ' + 'incisor'],
-                    ['rick_l1_apo_mm', 'L1 to APO (mm)', '1±2 mm', 'mm, ' + 'incisor'],
-                    ['rick_u6_ptv', 'U6 to PtV', 'Age+3 mm', 'mm, ' + 'normal'],
-                    ['rick_lip_e', 'L Lip to E-plane', '−2±2 mm', 'mm, ' + 'lip']
-                ]
-            },
-            {
-                id: 'burstone_hard', title: 'Burstone Analysis — Hard Tissue', source: 'Burstone CJ, James RB, Legan H, Murphy GA, Norton LA. Cephalometrics for orthognathic surgery. J Oral Surg. 1978;36:269–277.',
-                rows: [
-                    ['bur_ar_ptm', 'Ar-ptm', 'Male 37.1±2.8; Female 32.8±1.9', 'mm, ' + 'normal'],
-                    ['bur_ptm_n', 'Ptm-N', 'Male 52.8±4.1; Female 50.9±3', 'mm, ' + 'normal'],
-                    ['bur_napg', 'N-A-Pg (Angle)', 'Male 3.9±6.4°; Female 2.6±5.1°', '°, ' + 'profile'],
-                    ['bur_na', 'N-A', 'Male 0.0±3.7; Female −2±3.7', 'mm, ' + 'maxilla'],
-                    ['bur_nb', 'N-B', 'Male −5.3±6.7; Female −6.9±4.3', 'mm, ' + 'mandible'],
-                    ['bur_npg', 'N-Pg', 'Male −4.3±8.5; Female −6.5±5.1', 'mm, ' + 'mandible'],
-                    ['bur_nans', 'N-ANS', 'Male 54±3.2; Female 50±2.4', 'mm, ' + 'growth_vertical'],
-                    ['bur_ansgn', 'ANS-Gn', 'Male 68.6±3.8; Female 61.3±3.3', 'mm, ' + 'growth_vertical'],
-                    ['bur_pnsn', 'PNS-N', 'Male 53.9±1.7; Female 50.6±2.2', 'mm, ' + 'growth_vertical'],
-                    ['bur_mp_hp', 'MP-HP (Angle)', 'Male 23.0±5.9; Female 24.2±5', '°, ' + 'growth_vertical'],
-                    ['bur_l1_nf', 'L1-NF', 'Male 30.5±2.1; Female 27.5±1.7', 'mm, ' + 'incisor'],
-                    ['bur_l1_mp', 'L1-MP', 'Male 45.0±2.1; Female 40.8±1.8', 'mm, ' + 'incisor'],
-                    ['bur_u6_nf', 'U6-NF', 'Male 30.5±2.1; Female 27.5±1.7', 'mm, ' + 'normal'],
-                    ['bur_pnsans', 'PNS-ANS', 'Male 57.5±2.5; Female 52.6±3.5', 'mm, ' + 'maxilla'],
-                    ['bur_argo', 'Ar-Go', 'Male 52±4.2; Female 46.8±2.5', 'mm, ' + 'mandible'],
-                    ['bur_gopg', 'Go-Pg', 'Male 83.7±4.6; Female 74.3±5.8', 'mm, ' + 'mandible'],
-                    ['bur_bpg', 'B-Pg', 'Male 8.9±1.7; Female 72±1.9 (as supplied)', 'mm, ' + 'mandible'],
-                    ['bur_argo_gn', 'Ar-Go-Gn', 'Male 119.1±6.5°; Female 122±6.9°', '°, ' + 'growth_vertical'],
-                    ['bur_op_hp', 'OP-HP', 'Male 6.2±5.1°; Female 7.1±2.5°', '°, ' + 'normal'],
-                    ['bur_ab_op', 'A-B to Occlusal plane', 'Male −1.1±2.0; Female −0.4±2.5', 'mm, ' + 'sagittal_class'],
-                    ['bur_u1_nf', 'U1-NF', 'Male 111.0±4.7°; Female 112.5±5.3°', '°, ' + 'incisor']
-                ]
-            },
-            {
-                id: 'burstone_soft', title: 'Burstone Analysis — Soft Tissue', source: 'Legan HL, Burstone CJ. Soft tissue cephalometric analysis for orthognathic surgery. J Oral Surg. 1980;38:744–752.',
-                rows: [
-                    ['bst_facial_convexity', 'Facial convexity angle (G-Sn-Pg’)', '12±4°', '°, ' + 'profile'],
-                    ['bst_mx_prognathism', 'Maxillary Prognathism', '6±3 mm', 'mm, ' + 'maxilla'],
-                    ['bst_mand_prognathism', 'Mandibular Prognathism', '0±4 mm', 'mm, ' + 'mandible'],
-                    ['bst_vertical_ratio', 'Vertical Height Ratio', '1±1', 'ratio, ' + 'normal'],
-                    ['bst_lower_face_throat', 'Lower Face Throat Angle', '100±7°', '°, ' + 'profile'],
-                    ['bst_lower_vert_depth', 'Lower Vertical Height Depth Ratio', '1:2', 'ratio, ' + 'growth_vertical'],
-                    ['bst_nasolabial', 'Nasolabial Angle (Cm-Sn-Ls)', '102±8°', '°, ' + 'lip'],
-                    ['bst_upper_lip', 'Upper lip protrusion', '3±1 mm', 'mm, ' + 'lip'],
-                    ['bst_lower_lip', 'Lower lip protrusion', '2±1 mm', 'mm, ' + 'lip'],
-                    ['bst_mentolabial', 'Mentolabial Sulcus', '4±2 mm', 'mm, ' + 'lip'],
-                    ['bst_vertical_lip_chin', 'Vertical lip : Chin ratio', '0.5', 'ratio, ' + 'normal'],
-                    ['bst_incisor_exposure', 'Maxillary Incisor exposure', '2±2 mm', 'mm, ' + 'normal'],
-                    ['bst_interlabial_gap', 'Interlabial gap', '2±2 mm', 'mm, ' + 'normal']
-                ]
-            }
+            { id:'radiographic', title:'RADIOGRAPHIC ANALYSIS', source:'Supplied Model Analysis PDF, page 8.', kind:'fields', fields:[
+                ['opg_teeth_present','Teeth present'], ['opg_teeth_absent','Teeth absent'], ['opg_root_resorption','Root resorption'], ['opg_root_formation','Root formation'], ['opg_eruption','Eruption level'], ['opg_restoration','Character of restoration'], ['opg_lamina','Lamina dura and height of inter-dental crest'], ['opg_supernumerary','Supernumerary teeth'], ['opg_third_molar','Third molar'], ['opg_pathology','Pathological condition'], ['opg_other','Any other special investigation'], ['iopa','INTRA ORAL PERIAPICAL RADIOGRAPH']
+            ]},
+            { id:'cvm', title:'CERVICAL VERTEBRAE STAGE FOR THE PATIENT INFERENCE', source:'Supplied Model Analysis PDF, pages 9–10.', kind:'cvm' },
+            { id:'downs', title:'DOWNS’ ANALYSIS', source:'Supplied Model Analysis PDF, page 11.', kind:'cephRows', rows:[
+                ['downs_facial_angle','Facial Angle','87.8°','neutral'], ['downs_convexity','Angle of Convexity','0°','profile'], ['downs_ab_plane','A–B Plane','−4.6°','sagittal'], ['downs_mp','Mandibular Plane Angle','21.9°','growth'], ['downs_y_axis','Y–Axis','59.4°','growth'], ['downs_occl','Cant of Occlusal Plane','9.3°','neutral'], ['downs_interincisal','1 to 1','135.4°','incisor'], ['downs_u1_occl','1 to Occlusal Plane','14.5°','incisor'], ['downs_u1_mp','1 to Mandibular Plane','1.4°','incisor'], ['downs_u1_apo','1 to A–Pog Line','2.7 mm','incisor']
+            ]},
+            { id:'steiner', title:'STEINER ANALYSIS', source:'Steiner CC. Cephalometrics for you and me. Am J Orthod. 1953;39:729–755; supplied form.', kind:'cephRows', rows:[
+                ['steiner_sna','SNA','82°','maxilla'], ['steiner_snb','SNB','80°','mandible'], ['steiner_snd','SND','76°','mandible'], ['steiner_anb','ANB','2°','sagittal'], ['steiner_go_sn','Go Gn to SN','32°','growth'], ['steiner_u1na_mm','U1 to N–A (mm)','4 mm','incisor'], ['steiner_u1na_ang','U1 to N–A (Angle)','22°','incisor'], ['steiner_l1nb_mm','L1 to N–B (mm)','4 mm','incisor'], ['steiner_l1nb_ang','L1 to N–B (Angle)','25°','incisor'], ['steiner_pognb','Pog to N–B (mm)','','incisor'], ['steiner_u1l1','U1 to L1 (Angle)','','incisor'], ['steiner_occl_sn','Occl to S–N (Angle)','','growth'], ['steiner_sline','“S” Line','','soft_tissue']
+            ]},
+            { id:'wits_tweed', title:'WITS APPRAISAL + TWEED’S ANALYSIS', source:'Jacobson A. Wits appraisal of jaw disharmony. Am J Orthod. 1975;67:125–138; supplied form.', kind:'cephRows', rows:[
+                ['wits','Wits appraisal','Female AO≈BO; Male BO≈1 mm ahead of AO','wits'], ['tweed_fmpa','FMPA','25°','fma'], ['tweed_fmia','FMIA','65°','incisor'], ['tweed_impa','IMPA','90°','incisor'], ['soft_nasomental','Nasomental angle','120–132°','soft_tissue'], ['soft_nasolabial','Nasolabial angle','102±4°','soft_tissue'], ['soft_upper_lip','Upper lip prominence','1–2 mm ahead','soft_tissue'], ['soft_lower_lip','Lower lip prominence','1 mm behind','soft_tissue'], ['soft_chin','Chin prominence','−1 to −4 mm','soft_tissue'], ['soft_e','E Line','Upper lip 4 mm behind / lower lip 2 mm behind','soft_tissue'], ['soft_s','S Line','', 'soft_tissue'], ['soft_b','B Line','', 'soft_tissue'], ['soft_z','Merrifield “Z” angle','70–80° (75–78°)','soft_tissue'], ['soft_chin_thick','Soft Tissue Chin Thickness','10–12 mm','soft_tissue']
+            ]},
+            { id:'mcnamara', title:'McNAMARA’S ANALYSIS', source:'McNamara JA Jr. A method of cephalometric evaluation. Am J Orthod. 1984;86:449–469; supplied form.', kind:'cephRows', rows:[
+                ['mcn_nperp_a','N Perpendicular','0–1 mm','maxilla'], ['mcn_nperp_pog','N Perpendicular to pogonion','−4 to 0 mm','mandible'], ['mcn_facial_axis','Facial axis angle','0°','growth'], ['mcn_mp','Mandibular plane angle','22°±4°','growth'], ['mcn_effective_mx','Effective maxillary length','Age/sex dependent','maxilla'], ['mcn_effective_mand','Effective mandibular length','Age/sex dependent','mandible'], ['mcn_diff','Maxillofacial differential','27–30 mm','sagittal'], ['mcn_lafh','Lower anterior facial height','65–67 mm','growth'], ['mcn_u1_pta','1 to Pt A distance','4–6 mm','incisor'], ['mcn_l1_apo','1 to APo line distance','1–3 mm','incisor'], ['mcn_upper_airway','Upper airway','','airway'], ['mcn_lower_airway','Lower airway','','airway']
+            ]},
+            { id:'jarabak_ricketts', title:'RAKOSI-JARABAK’S ANALYSIS + RICKETTS ANALYSIS', source:'Supplied Model Analysis PDF, pages 15–16.', kind:'cephRows', rows:[
+                ['jar_saddle','Saddle Angle','123±5°','neutral'], ['jar_articular','Articular Angle','143±6°','neutral'], ['jar_gonial','Gonial Angle','128±7°','growth'], ['jar_upper_gonial','U/Gonial Angle','52–55°','growth'], ['jar_lower_gonial','L/Gonial Angle','72–75°','growth'], ['jar_sum','Sum of Posterior angle','396±6°','jarabak_sum'], ['jar_mandibular','Mandibular Angle','32°','growth'], ['jar_inclination','Angle of Inclination','85°','neutral'], ['jar_pn_op','Pn to Occlusal plane','75°','neutral'], ['jar_pn_mp','Pn to Mandibular Plane','65°','normal'], ['jar_basal','Basal Plane Angle','25°','growth'], ['jar_pp_op','Palatal Plane to Occlusal Plane','11°','normal'], ['jar_op_mp','Occlusal Plane to MP','14°','growth'], ['jar_ratio','Post. To Ant. Face ht. Ratio','62–65%','jarabak'], ['jar_y','Y-Axis','66°','growth'], ['jar_interincisal','Interincisal angle','135°','incisor'], ['jar_u1_sn','U1 to SN plane','102±2°','incisor'], ['jar_u1_pp','U1 to Palatal plane','75±5°','incisor'], ['jar_l1_mp','L1 to Mandibular plane','90±3°','incisor'], ['rick_facial_axis','Facial Axis angle','90±3.5°','ricketts_axis'], ['rick_facial_depth','Facial Depth','87±3°','mandible'], ['rick_mp','M.P. Angle','26±4.5°','growth'], ['rick_convexity','Convexity of pt. A','2±2 mm','ricketts_convexity'], ['rick_l1_apo_ang','1 to APO (angle)','22°±4°','incisor'], ['rick_l1_apo_mm','1 to APO (mm)','1±2 mm','incisor'], ['rick_u6_ptv','U6 to PtV','Age+3 mm','neutral'], ['rick_lip_e','L Lip to E-plane','−2±2 mm','soft_tissue']
+            ]},
+            { id:'burstone_hard', title:'BURSTONE ANALYSIS (HARD TISSUE)', source:'Burstone CJ et al. Cephalometrics for orthognathic surgery. J Oral Surg. 1978;36:269–277; supplied form.', kind:'cephRows', rows:[
+                ['bur_ar_ptm','Ar-ptm','Male 37.1±2.8 / Female 32.8±1.9','neutral'], ['bur_ptm_n','Ptm-N','Male 52.8±4.1 / Female 50.9±3','neutral'], ['bur_napg','N-A-Pg (Angle)','Male 3.9±6.4° / Female 2.6±5.1°','profile'], ['bur_na','N-A','Male 0.0±3.7 / Female −2±3.7','maxilla'], ['bur_nb','N-B','Male −5.3±6.7 / Female −6.9±4.3','mandible'], ['bur_npg','N-Pg','Male −4.3±8.5 / Female −6.5±5.1','mandible'], ['bur_nans','N-ANS','Male 54±3.2 / Female 50±2.4','growth'], ['bur_ansgn','ANS-Gn','Male 68.6±3.8 / Female 61.3±3.3','growth'], ['bur_pnsn','PNS-N','Male 53.9±1.7 / Female 50.6±2.2','growth'], ['bur_mphp','MP-HP (Angle)','Male 23.0±5.9 / Female 24.2±5','growth'], ['bur_l1_nf','1l-NF','Male 30.5±2.1 / Female 27.5±1.7','incisor'], ['bur_l1_mp','1l-MP','Male 45.0±2.1 / Female 40.8±1.8','incisor'], ['bur_6_nf','6l-NF','Male 30.5±2.1 / Female 27.5±1.7','neutral'], ['bur_pnsans','PNS-ANS','Male 57.5±2.5 / Female 52.6±3.5','maxilla'], ['bur_argo','Ar-Go','Male 52±4.2 / Female 46.8±2.5','mandible'], ['bur_gopg','Go-Pg','Male 83.7±4.6 / Female 74.3±5.8','mandible'], ['bur_bpg','B-Pg','As supplied in form','mandible'], ['bur_argogn','Ar-Go-Gn','Male 119.1±6.5° / Female 122±6.9°','growth'], ['bur_ophp','OP-HP (Angle)','Male 6.2±5.1° / Female 7.1±2.5°','growth'], ['bur_abop','A-B (to Occlusal plane)','Male −1.1±2.0 / Female −0.4±2.5','sagittal'], ['bur_u1nf','1 NF (Angle)','Male 111.0±4.7° / Female 112.5±5.3°','incisor']
+            ]},
+            { id:'burstone_soft', title:'BURSTONE ANALYSIS (SOFT TISSUE)', source:'Legan HL, Burstone CJ. Soft tissue cephalometric analysis for orthognathic surgery. J Oral Surg. 1980;38:744–752; supplied form.', kind:'cephRows', rows:[
+                ['bst_facial_convexity','Facial convexity angle (G-Sn-Pg′)','12±4°','profile'], ['bst_mx_prognathism','Maxillary Prognathism','6±3 mm','maxilla'], ['bst_mand_prognathism','Mandibular Prognathism','0±4 mm','mandible'], ['bst_vertical_ratio','Vertical Height ratio','1±1','growth'], ['bst_lft_angle','Lower Face Throat Angle','100±7°','profile'], ['bst_lower_depth','Lower Vertical Height Depth ratio','1:2','growth'], ['bst_nasolabial','Nasolabial Angle (Cm-Sn-Ls)','102±8°','soft_tissue'], ['bst_upper_lip','Upper lip protrusion','3±1 mm','soft_tissue'], ['bst_lower_lip','Lower lip protrusion','2±1 mm','soft_tissue'], ['bst_mentolabial','Mentolabial Sulcus','4±2 mm','soft_tissue'], ['bst_lip_chin','Vertical lip : Chin Ratio','0.5','neutral'], ['bst_incisor_exposure','Maxillary Incisor exposure','2±2 mm','neutral'], ['bst_interlabial','Interlabial gap','2±2 mm','neutral']
+            ]}
         ];
 
         const COMPOSITE_CEPH_SECTIONS = [
-            {
-                title: 'I. Maxilla to Cranium', rows: [
-                    ['comp_sna', 'SNA', '82°'], ['comp_n_a', 'N ⟂ to A', '0–1 mm'], ['comp_coa', 'Effective Maxillary Length (Co-Pt.A)', 'Age/sex dependent'], ['comp_convexity', 'Convexity of Pt.A', '2±2 mm']
-                ]
-            },
-            {
-                title: 'II. Mandible to Cranium', rows: [
-                    ['comp_snb', 'SNB', '80°'], ['comp_facial_angle', 'Facial angle', '87.8°'], ['comp_cogn', 'Effective Mandibular Length (Co-Gn)', 'Age/sex dependent'], ['comp_n_pog', 'N ⟂ to Pog', '−4 to 0 mm']
-                ]
-            },
-            {
-                title: 'III. Maxilla to Mandible', rows: [
-                    ['comp_anb', 'ANB', '2°'], ['comp_ab_plane', 'AB plane angle', '−4.6°'], ['comp_wits', 'Wits', 'Female AO≈BO; Male BO≈+1 mm'], ['comp_angle_convexity', 'Angle of convexity', '0°'], ['comp_mmd', 'Maxillomandibular differential', '27–30 mm / age dependent']
-                ]
-            },
-            {
-                title: 'IV. Vertical Relationship', rows: [
-                    ['comp_gogn_sn', 'Go-Gn to Sn', '32°'], ['comp_fh_mp', 'FH to Mandibular Plane', '21.9°'], ['comp_fmpa', 'FMPA', '25°'], ['comp_facial_axis', 'Facial Axis Angle', '0° in supplied composite'], ['comp_y_axis', 'Y Axis Angle', '59.4°'], ['comp_jarabak', 'Jarabak Ratio', '62–65%'], ['comp_sn_occl', 'SN-Occl Plane', '14°'], ['comp_pal_occl', 'Palatal Plane-Occl Plane', '11°'], ['comp_lafh', 'Lower Anterior Facial Height', 'Small 60–62 / Medium 65–67 / Large 70–73 mm'], ['comp_post_sum', 'Sum of Posterior Angles', '396±6°']
-                ]
-            },
-            {
-                title: 'V. Dental Parameter', rows: [
-                    ['comp_u1_na_ang', 'Upper 1 to NA (Angle)', '22°'], ['comp_u1_na_mm', 'Upper 1 to NA (mm)', '4 mm'], ['comp_u1_sn', 'Upper 1 to SN', '102±2°'], ['comp_l1_nb_ang', 'Lower 1 to NB (Angle)', '25°'], ['comp_l1_nb_mm', 'Lower 1 to NB (mm)', '4 mm'], ['comp_impa', 'IMPA', '90°'], ['comp_interincisal', 'Interincisal Angle', '135.4°'], ['comp_holdaway', 'Holdaway Ratio', '1:1']
-                ]
-            },
-            {
-                title: 'VI. Soft Tissue Analysis', rows: [
-                    ['comp_ul_eline', 'Upper Lip to E-Line', 'UL 4 mm behind'], ['comp_ll_eline', 'Lower Lip to E-Line', 'LL 2 mm behind'], ['comp_nasolabial', 'Nasolabial Angle', '102±4°'], ['comp_z', 'Merrifield Z Angle', '80±9°'], ['comp_sline', 'S Line', 'Touches both lips'], ['comp_mentolabial', 'Mentolabial Sulcus Depth', '5 mm']
-                ]
-            }
+            { title:'I. MAXILLA TO CRANIUM', rows:[
+                ['comp_sna','SNA','82°'], ['comp_n_a','N ⟂ TO A','0–1 mm'], ['comp_effective_mx','EFFECTIVE MAX. LENGTH (CO-Pt.A)','Age/sex dependent'], ['comp_convexity','CONVEXITY OF Pt. A','2±2 mm']
+            ]},
+            { title:'II. MANDIBLE TO CRANIUM', rows:[
+                ['comp_snb','SNB','80°'], ['comp_facial_angle','FACIAL ANGLE','87.8°'], ['comp_effective_mand','EFFECT. MAND. LENGTH (CO-GN)','Age/sex dependent'], ['comp_n_pog','N ⟂ TO POG','−4 to 0 mm']
+            ]},
+            { title:'III. MAXILLA TO MANDIBLE', rows:[
+                ['comp_anb','ANB','2°'], ['comp_ab_plane','AB PLANE ANGLE','−4.6°'], ['comp_wits','WITS','BO is ahead of AO by 1 mm (male); AO≈BO (female)'], ['comp_angle_convexity','ANGLE OF CONVEXITY','0°'], ['comp_mmd','MAXILLO-MANDIBULAR DIFFERENTIAL','Small 20–23 / Medium 27–30 / Large 30–33 mm']
+            ]},
+            { title:'IV. VERTICAL RELATIONSHIP', rows:[
+                ['comp_gogn_sn','Go-Gn to SN','32°'], ['comp_fh_mp','FH to MANDIBULAR PLANE','21.9°'], ['comp_fmpa','FMPA','25°'], ['comp_facial_axis','FACIAL AXIS ANGLE','0° (as supplied)'], ['comp_y_axis','Y AXIS ANGLE','59.4°'], ['comp_jarabak','JARABAK RATIO','62–65%'], ['comp_sn_occl','SN-OCCL PLANE','14°'], ['comp_pal_occl','PALATAL PLANE-OCCL PLANE','11°'], ['comp_lafh','LOWER ANT. FACIAL HEIGHT','Small 60–62 / Medium 65–67 / Large 70–73 mm'], ['comp_post_sum','SUM OF POST. ANGLE','396±6°']
+            ]},
+            { title:'V. DENTAL PARAMETER', rows:[
+                ['comp_u1na_ang','UPPER 1 TO NA (ANGLE)','22°'], ['comp_u1na_mm','UPPER 1 TO NA (MM)','4 mm'], ['comp_u1sn','UPPER 1 TO SN','102±2°'], ['comp_l1nb_ang','LOWER 1 TO NB (ANGLE)','25°'], ['comp_l1nb_mm','LOWER 1 TO NB (MM)','4 mm'], ['comp_impa','IMPA','90°'], ['comp_interincisal','INTERINCISAL ANGLE','135.4°'], ['comp_holdaway','HOLDAWAY RATIO','1:1']
+            ]},
+            { title:'VI. SOFT TISSUE ANALYSIS', rows:[
+                ['comp_ul_e','UPPER LIP TO E LINE','UL 4 mm behind'], ['comp_ll_e','LOWER LIP TO E LINE','LL 2 mm behind'], ['comp_nasolabial','NASOLABIAL ANGLE','102±4°'], ['comp_z','MERRIFIELD Z ANGLE','80±9°'], ['comp_sline','S LINE','Touches both lips'], ['comp_mentolabial','MENTOLABIAL SULCUS DEPTH','5 mm']
+            ]}
         ];
 
         const CASE_HISTORY_SECTIONS = [
-            { title: 'A. PERSONAL DETAILS', fields: [
-                ['name', 'Name', 'text'], ['occupation', 'Occupation', 'text'], ['age_sex', 'Age / Sex', 'text'], ['ethnic_origin', 'Ethnic origin', 'text'], ['opd_no', 'OPD No.', 'text'], ['religion', 'Religion', 'text'], ['address', 'Address', 'textarea'], ['phone', 'Ph. No.', 'text'], ['dob', 'D.O.B.', 'date'], ['record_date', 'Date', 'date']
+            { title:'I. CASE HISTORY RECORD — A. PERSONAL DETAILS', rows:[
+                ['name','Name','text'],['occupation','Occupation','text'],['age_sex','Age / Sex','text'],['ethnic_origin','Ethnic origin','text'],['opd_no','OPD No.','text'],['reg_no','Reg. No.','text'],['address','Address','textarea'],['phone','Ph. No.','text'],['dob','D.O.B','date'],['record_date','Date','date'],['doctor_name','Doctor’s Name','text'],['completion_date','Completion of Treatment','date']
             ]},
-            { title: 'B. CHIEF COMPLAINT (Patient’s own words & description)', fields: [['chief_complaint', 'Chief Complaint', 'textarea']] },
-            { title: 'C. FAMILY HISTORY', fields: [
-                ['family_malocclusion_father', 'Malocclusion — Father', 'yesno'], ['family_malocclusion_mother', 'Malocclusion — Mother', 'yesno'], ['family_malocclusion_siblings', 'Malocclusion — Siblings', 'yesno'],
-                ['family_disease_father', 'Familial diseases — Father', 'yesno'], ['family_disease_mother', 'Familial diseases — Mother', 'yesno'], ['family_disease_siblings', 'Familial diseases — Siblings', 'yesno'],
-                ['family_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'D. HISTORY — PRE-NATAL', fields: [
-                ['informer', 'Informer', 'select:Patient|Father|Mother|Any other'], ['maternal_condition', 'Condition of mother during pregnancy', 'textarea'], ['delivery', 'Delivery', 'select:Full term|Premature'], ['delivery_type', 'Type', 'select:Normal|Forceps|Caesarean']
-            ]},
-            { title: 'D. HISTORY — POST-NATAL & DEVELOPMENT', fields: [
-                ['feeding', 'Feeding', 'select:Breast|Bottle|Combination'], ['feeding_details', 'Duration & frequency, type of nipple used', 'textarea'], ['milestones', 'Developmental milestones', 'select:Normal|Abnormal'], ['crawling', 'Crawling', 'text'], ['standing', 'Standing', 'text'], ['walking', 'Walking', 'text'], ['running', 'Running', 'text'], ['teething', 'Teething', 'text'], ['speaking', 'Speaking', 'text'], ['puberty', 'Onset of puberty', 'text'], ['postnatal_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'E. DENTAL HISTORY', fields: [
-                ['dental_restoration_injury_surgery', 'Restoration / injuries / surgery', 'textarea'], ['dental_fractures', 'Fractures', 'textarea'], ['previous_ortho', 'Any attempt for orthodontic correction', 'textarea'], ['dental_recent_treatment', 'Recently under treatment for', 'textarea'], ['dental_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'F. MEDICAL HISTORY', fields: [
-                ['medical_major_illness', 'Major illness / illness / injuries / Surgery', 'textarea'], ['medical_recent_treatment', 'Recently under treatment for', 'textarea'], ['medical_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'G. HABITS', fields: [
-                ['habit_none', 'None / no habit reported', 'checkbox'], ['habit_finger_thumb', 'Finger / thumb sucking', 'checkbox'], ['habit_lip_biting', 'Lip biting', 'checkbox'], ['habit_tongue_thrust', 'Tongue thrusting', 'checkbox'], ['habit_nail_biting', 'Nail biting', 'checkbox'], ['habit_bruxism', 'Bruxism', 'checkbox'], ['habit_other', 'Any other habit', 'textarea']
-            ]},
-            { title: 'CLINICAL EXAMINATION — GENERAL', fields: [
-                ['body_type', 'Body Type', 'text'], ['height', 'Height', 'text'], ['body_build', 'Body Build', 'text'], ['weight', 'Weight', 'text']
-            ]},
-            { title: 'EXTRA ORAL EXAMINATION — FRONTAL', fields: [
-                ['head_shape', 'Shape of Head', 'select:Mesocephalic|Dolichocephalic|Brachycephalic'], ['facial_form', 'Facial Form', 'select:Mesoprosopic|Leptoprosopic|Euryprosopic'], ['vertical_properties', 'Vertical Properties', 'textarea'], ['nasolabial_fold', 'Nasolabial fold', 'select:Normal|Obliterated|Flattened'], ['nasolabial_angle_clinical', 'Nasolabial angle', 'select:Normal|Acute|Obtuse'], ['smile', 'Smile', 'select:Commissural|Non commissural|Reverse'], ['lip_length', 'Lip length — details', 'textarea'], ['lip_posture', 'Lip posture', 'select:Competent|Incompetent|Potentially incompetent|Everted lower lip|Lower lip redundant|Short upper lip'], ['tonicity', 'Tonicity', 'select:Hypertonic|Hypotonic'], ['interlabial_gap_clinical', 'Interlabial gap', 'text'], ['facial_symmetry', 'Facial symmetry', 'textarea'], ['extraoral_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'EXTRA ORAL EXAMINATION — PROFILE', fields: [
-                ['facial_convexity', 'Facial convexity', 'select:Straight|Convex|Concave'], ['facial_divergence', 'Facial divergence', 'select:Orthognathic|Anterior|Posterior'], ['chin_position', 'Position of chin', 'select:Normal|Prominent|Recessive'], ['mandibular_plane_clinical', 'Mandibular plane', 'select:Flat|Steep|Normal'], ['clinical_fma', 'Clinical F.M.A', 'select:Average|High|Low'], ['vto', 'V.T.O', 'textarea'], ['profile_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'INTRA ORAL EXAMINATION — SOFT TISSUE', fields: [
-                ['oh_status', 'Oral Hygiene status', 'select:Good|Satisfactory|Poor'], ['brushing', 'Brushing habit', 'text'], ['calculus', 'Calculus', 'select:Present|Absent'], ['gingiva', 'Gingiva', 'select:Normal|Gingivitis|Periodontitis'], ['oral_mucosa', 'Oral mucosa', 'select:Normal|Abnormal'], ['frenal_upper', 'Frenal attachment — upper', 'text'], ['frenal_lower', 'Frenal attachment — lower', 'text'], ['tongue_size', 'Tongue size', 'select:Normal|Enlarged|Scalloping'], ['tongue_position', 'Tongue position', 'select:Normal|Faulty|Tongue thrust'], ['soft_tissue_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'INTRA ORAL EXAMINATION — HARD TISSUE', fields: [
-                ['mx_arch_shape', 'Maxillary arch shape', 'text'], ['mx_arch_symmetry', 'Maxillary arch symmetry', 'text'], ['mx_teeth_present', 'Maxillary teeth present', 'textarea'], ['mx_unerupted', 'Maxillary unerupted teeth', 'textarea'], ['mx_developmental', 'Maxillary developmental status of occlusion', 'select:Deciduous|Mixed|Permanent'], ['mx_tooth_abnormality', 'Maxillary individual tooth abnormality', 'textarea'], ['mx_number_variation', 'Maxillary variation in number', 'textarea'], ['mx_morphology', 'Maxillary morphology / structure', 'textarea'], ['mx_midline', 'Upper midline w.r.t skeletal midline', 'text'], ['mx_findings', 'Any other maxillary findings', 'textarea'],
-                ['md_arch_shape', 'Mandibular arch shape', 'text'], ['md_arch_symmetry', 'Mandibular arch symmetry', 'text'], ['md_teeth_present', 'Mandibular teeth present', 'textarea'], ['md_unerupted', 'Mandibular unerupted teeth', 'textarea'], ['md_developmental', 'Mandibular developmental status of occlusion', 'select:Deciduous|Mixed|Permanent'], ['md_tooth_abnormality', 'Mandibular individual tooth abnormality', 'textarea'], ['md_number_variation', 'Mandibular variation in number', 'textarea'], ['md_morphology', 'Mandibular morphology / structure', 'textarea'], ['md_midline', 'Lower midline w.r.t skeletal midline', 'text'], ['md_findings', 'Any other mandibular findings', 'textarea'], ['curve_spee_clinical', 'Curve of Spee', 'select:Normal|Flat|Deep']
-            ]},
-            { title: 'EXAMINATION OF OCCLUSION', fields: [
-                ['molar_right_clinical', 'Molar relation — Right', 'text'], ['molar_left_clinical', 'Molar relation — Left', 'text'], ['canine_right_clinical', 'Canine relation — Right', 'text'], ['canine_left_clinical', 'Canine relation — Left', 'text'], ['clinical_overjet', 'Overjet', 'text'], ['clinical_overbite', 'Overbite', 'text'], ['deepbite_openbite', 'Deepbite / Open bite', 'text'], ['occlusion_midline', 'Midline', 'text'], ['occlusion_crossbite', 'Crossbite', 'text'], ['scissor_bite', 'Scissor bite', 'text'], ['dental_midline', 'Upper to lower dental midline', 'text'], ['occlusion_remarks', 'If any / Remarks', 'textarea']
-            ]},
-            { title: 'FUNCTIONAL EXAMINATION', fields: [
-                ['respiration', 'Respiration', 'select:Nasal|Oral|Oro-nasal'], ['deglutition', 'Deglutition', 'select:Normal|Tongue thrusting|Abnormal'], ['speech', 'Speech', 'select:Normal|Abnormal'], ['maximum_opening', 'Maximum mouth opening', 'text'], ['interocclusal_clearance', 'Interocclusal clearance', 'text'], ['tmj', 'Examination of TMJ', 'select:Normal|Clicking|Pain|Tenderness'], ['mandibular_closure', 'Path of closure mandible', 'textarea'], ['prematurities', 'Occlusal prematurities', 'textarea'], ['incisor_exposure_rest', 'Incisor exposure — rest', 'text'], ['incisor_exposure_smile', 'Incisor exposure — smile', 'text'], ['protrusion', 'Protrusion', 'textarea'], ['lateral_excursion_right', 'Lateral excursion — Right', 'text'], ['lateral_excursion_left', 'Lateral excursion — Left', 'text'], ['functional_remarks', 'If any / Remarks', 'textarea']
-            ]}
+            { title:'B. CHIEF COMPLAINT (Patient’s own words & description)', rows:[['chief_complaint','Chief Complaint','textarea']]},
+            { title:'C. FAMILY HISTORY', family:true },
+            { title:'D. HISTORY — PRE-NATAL', rows:[['informer','Informer','select:Patient|Father|Mother|Any other'],['maternal_condition','Condition of mother during pregnancy','textarea'],['delivery','Delivery','select:Full term|Premature'],['delivery_type','Type','select:Normal|Forceps|Caesarean']]},
+            { title:'D. HISTORY — POST-NATAL', rows:[['feeding','Feeding','select:Breast|Bottle|Combination'],['feeding_details','Duration & frequency, type of nipple used (bottle feeding)','textarea'],['milestones','Developmental Milestones','select:Normal|Abnormal'],['crawling','Crawling','text'],['standing','Standing','text'],['walking','Walking','text'],['running','Running','text'],['teething','Teething','text'],['speaking','Speaking','text'],['puberty','Onset of puberty','text']]},
+            { title:'E. DENTAL HISTORY', rows:[['dental_restoration','Restoration / injuries / surgery','textarea'],['dental_fractures','Fractures','textarea'],['previous_ortho','Any attempt for orthodontic correction','textarea'],['recent_treatment','Recently under treatment for','textarea']]},
+            { title:'F. MEDICAL HISTORY', rows:[['medical_major','Major illness / injuries / surgery','textarea'],['medical_recent','Recently under treatment for','textarea']]},
+            { title:'G. HABITS', habits:true },
+            { title:'II. CLINICAL EXAMINATION — A. GENERAL EXAMINATION', rows:[['body_type','Body Type','text'],['height','Height','text'],['body_build','Body Build','text'],['weight','Weight','text']]},
+            { title:'B. EXTRA ORAL EXAMINATION — FRONTAL VIEW', rows:[['head_shape','Shape of Head','select:Mesocephalic|Dolichocephalic|Brachycephalic'],['facial_form','Facial Form','select:Mesoprosopic|Leptoprosopic|Euryprosopic'],['vertical_properties','Vertical Properties — Upper / Middle / Lower face','text'],['nasolabial_fold','Nasolabial fold','select:Normal|Obliterated|Flattened'],['nasolabial_angle','Nasolabial angle','select:Normal|Acute|Obtuse'],['smile','Smile','select:Commissural|Non commissural|Reverse'],['lip_length','Lip length — corner / philtrum','textarea'],['lip_posture','Lip posture','select:Competent|Incompetent|Potentially incompetent|Everted lower lip|Lower lip redundant|Short upper lip'],['tonicity','Tonicity','select:Hypertonic|Hypotonic'],['interlabial_gap','Interlabial gap','text'],['facial_symmetry','Facial symmetry','text']]},
+            { title:'B. EXTRA ORAL EXAMINATION — PROFILE', rows:[['facial_convexity','Facial convexity','select:Straight|Convex|Concave'],['facial_divergence','Facial divergence','select:Orthognathic|Anterior|Posterior'],['chin_position','Position of chin','select:Normal|Prominent|Recessive'],['mandibular_plane_clinical','Mandibular plane','select:Flat|Steep|Normal'],['clinical_fma','Clinical F.M.A','select:Average|High|Low'],['vto','V.T.O','textarea']]},
+            { title:'C. INTRA ORAL EXAMINATION (SOFT TISSUE)', rows:[['oh','Oral Hygiene status','select:Good|Satisfactory|Poor'],['brushing','Brushing habit','text'],['calculus','Calculus','select:Present|Absent'],['gingiva','Gingiva','select:Normal|Gingivitis|Periodontitis'],['oral_mucosa','Oral mucosa','select:Normal|Abnormal'],['frenal_u','Frenal attachment U','text'],['frenal_l','Frenal attachment L','text'],['tongue_size','Tongue — Size','select:Normal|Enlarged|Scalloping'],['tongue_position','Tongue — Position','select:Normal|Faulty|Tongue thrust']]},
+            { title:'D. INTRA ORAL EXAMINATION (HARD TISSUE) — MAXILLARY ARCH', rows:[['mx_shape','1) Shape of the arch','text'],['mx_symmetry','2) Symmetry of arch','text'],['mx_teeth_present','3) Teeth present','textarea'],['mx_unerupted','4) Unerupted teeth','textarea'],['mx_dev','5) Developmental status of Occlusion','select:Deciduous|Mixed|Permanent'],['mx_abnormality','6) Individual tooth abnormality','textarea'],['mx_number','7) Variation in number of teeth','textarea'],['mx_morphology','8) Variation in morphology & Structure','textarea'],['mx_midline','9) Upper midline w.r.t skeletal midline','text'],['mx_other','10) Any other findings','textarea']]},
+            { title:'D. INTRA ORAL EXAMINATION (HARD TISSUE) — MANDIBULAR ARCH', rows:[['md_shape','1) Shape of the arch','text'],['md_symmetry','2) Symmetry of arch','text'],['md_teeth_present','3) Teeth present','textarea'],['md_unerupted','4) Unerupted teeth','textarea'],['md_dev','5) Developmental status of Occlusion','select:Deciduous|Mixed|Permanent'],['md_abnormality','6) Individual tooth abnormality','textarea'],['md_number','7) Variation in number of teeth','textarea'],['md_morphology','8) Variation in morphology & structure','textarea'],['md_midline','9) Lower midline w.r.t. skeletal midline','text'],['md_other','10) Any other findings','textarea'],['md_curve_spee','11) Curve of Spee','select:Normal|Flat|Deep']]},
+            { title:'E. EXAMINATION OF OCCLUSION', rows:[['occ_molar_r','a) Molar relation — Right','text'],['occ_molar_l','a) Molar relation — Left','text'],['occ_canine_r','b) Canine relation — Right','text'],['occ_canine_l','b) Canine relation — Left','text'],['occ_overjet','c) Overjet','text'],['occ_overbite','a) Overbite','text'],['occ_deep_open','b) Deepbite / Open bite','text'],['occ_midline','3a) Midline','text'],['occ_crossbite','3b) Crossbite','text'],['occ_scissor','3c) Scissor bite','text'],['occ_dental_midline','4) Upper to lower (Dental midline)','text']]},
+            { title:'F. FUNCTIONAL EXAMINATION', rows:[['respiration','Respiration','select:Nasal|Oral|Oro-nasal'],['deglutition','Deglutition','select:Normal|Tongue Thrusting|Abnormal'],['speech','Speech','select:Normal|Abnormal'],['opening','Maximum mouth opening','text'],['clearance','Interocclusal clearance','text'],['tmj','Examination of TMJ','select:Clicking|Pain|Tenderness|Normal'],['closure','Path of closure mandible','textarea'],['prematurities','Occlusal prematurities','textarea'],['incisor_rest','Amount of incisor exposure — During rest','text'],['incisor_smile','Amount of incisor exposure — During smile','text'],['protrusion','Protrusion','text'],['lateral_r','Lateral excursion — Right','text'],['lateral_l','Lateral excursion — Left','text']]}
         ];
 
         const DIAGNOSIS_PLAN_SECTIONS = [
-            { title: 'V. DIAGNOSIS', fields: [['diagnosis', 'Diagnosis', 'textarea'], ['diagnosis_remarks', 'If any / Remarks', 'textarea']] },
-            { title: 'PROBLEM LIST', fields: [['problem_list', 'Problem List', 'textarea']] },
-            { title: 'TREATMENT OBJECTIVES', fields: [['objectives', 'Treatment Objectives', 'textarea']] },
-            { title: 'TREATMENT PLAN', fields: [['treatment_plan', 'Treatment Plan', 'textarea']] },
-            { title: 'ANCHORAGE PLAN', fields: [['anchorage_plan', 'Anchorage Plan', 'textarea']] },
-            { title: 'RETENTION PLAN', fields: [['retention_plan', 'Retention Plan', 'textarea']] },
-            { title: 'PROGNOSIS', fields: [['prognosis', 'Prognosis', 'textarea']] },
-            { title: 'BRACKET POSITIONING', fields: [['bracket_maxillary', 'MAXILLARY', 'textarea'], ['bracket_mandibular', 'MANDIBULAR', 'textarea']] },
-            { title: 'CASE SYNOPSIS', fields: [
-                ['synopsis_patient_name', 'PATIENT NAME', 'text'], ['synopsis_opd', 'OPD NO', 'text'], ['synopsis_age', 'AGE', 'text'], ['synopsis_sex', 'SEX', 'text'], ['synopsis_records', 'RECORDS', 'textarea'], ['synopsis_extractions', 'EXTRACTIONS', 'textarea'], ['synopsis_habit_corrections', 'HABIT CORRECTIONS', 'textarea'], ['synopsis_functional_appliance', 'FUNCTIONAL APPLIANCE', 'textarea'], ['synopsis_expansion', 'EXPANSION THERAPY', 'textarea'], ['synopsis_fixed', 'FIXED THERAPY', 'textarea'], ['synopsis_wire_upper', 'WIRE SEQUENCE UPPER', 'textarea'], ['synopsis_wire_lower', 'WIRE SEQUENCE LOWER', 'textarea'], ['synopsis_elastic_force', 'ELASTIC FORCE', 'textarea'], ['synopsis_extraoral_force', 'EXTRA ORAL FORCE', 'textarea'], ['synopsis_retention', 'RETENTION', 'textarea']
-            ]}
+            { title:'V. DIAGNOSIS AND TREATMENT PLANNING — CASE SUMMARY & DISCUSSION', rows:[['diagnosis','DIAGNOSIS','textarea'],['problem_list','PROBLEM LIST','textarea'],['objectives','TREATMENT OBJECTIVES','textarea'],['treatment_plan','TREATMENT PLAN','textarea'],['anchorage','ANCHORAGE PLAN','textarea'],['retention','RETENTION PLAN','textarea'],['prognosis','PROGNOSIS','textarea'],['bracket_maxillary','BRACKET POSITIONING — MAXILLARY','textarea'],['bracket_mandibular','BRACKET POSITIONING — MANDIBULAR','textarea']]},
+            { title:'VI. PAYMENT RECORD', rows:[['appliance','ORTHODONTIC APPLIANCE','text'],['initial_payment','Initial payment — Rs.','currency'],['receipt_no','Receipt No.','text'],['receipt_date','Dated','date']] , paymentTable:true },
+            { title:'VII. TREATMENT RECORD', treatmentRecord:true },
+            { title:'VIII. CASE SYNOPSIS', rows:[['syn_patient','PATIENT NAME','text'],['syn_opd','OPD NO','text'],['syn_age','AGE','text'],['syn_sex','SEX','text'],['syn_records','RECORDS','textarea'],['syn_extractions','EXTRACTIONS','textarea'],['syn_habits','HABIT CORRECTIONS','textarea'],['syn_functional','FUNCTIONAL APPLIANCE','textarea'],['syn_expansion','EXPANSION THERAPY','textarea'],['syn_fixed','FIXED THERAPY','textarea'],['syn_wire_upper','WIRE SEQUENCE UPPER','textarea'],['syn_wire_lower','LOWER','textarea'],['syn_elastic','ELASTIC FORCE','textarea'],['syn_extraoral','EXTRA ORAL FORCE','textarea'],['syn_retention','RETENTION','textarea']]}
         ];
 
-        function caseSheetValue(store, key) {
-            return (store && store[key]?.value) ?? '';
-        }
-        function caseSheetInference(store, key) {
-            return (store && store[key]?.inference) ?? '';
-        }
-        function caseSheetRemark(store, key) {
-            return (store && store[key]?.remark) ?? '';
-        }
+        function caseSheetValue(store, key) { return (store && store[key]?.value) ?? ''; }
+        function caseSheetInference(store, key) { return (store && store[key]?.inference) ?? ''; }
+        function caseSheetRemark(store, key) { return (store && store[key]?.remark) ?? ''; }
         function escCase(value) { return escapeHtml(value == null ? '' : String(value)); }
-
-        function renderCaseField(field, store, includeInference = false, inferenceGroup = 'normal') {
-            const [key, label, type] = field;
+        function caseFieldControl(key, label, type, store) {
             const value = caseSheetValue(store, key);
-            const remark = caseSheetRemark(store, key);
-            let control = '';
             if (type.startsWith('select:')) {
                 const opts = type.slice(7).split('|');
-                control = `<select data-cs-value="${key}" class="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"><option value="">Select…</option>${opts.map(o => `<option ${value === o ? 'selected' : ''}>${escCase(o)}</option>`).join('')}</select>`;
-            } else if (type === 'textarea') {
-                control = `<textarea data-cs-value="${key}" rows="3" class="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm resize-y focus:outline-none focus:ring-2 focus:ring-emerald-500">${escCase(value)}</textarea>`;
-            } else if (type === 'date') {
-                control = `<input type="date" data-cs-value="${key}" value="${escCase(value)}" class="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">`;
-            } else if (type === 'checkbox') {
-                control = `<label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" data-cs-value="${key}" ${value === 'true' ? 'checked' : ''} class="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"><span>${escCase(label)}</span></label>`;
-                return `<div class="bg-white border border-slate-200 rounded-xl p-3">${control}</div>`;
-            } else if (type === 'yesno') {
-                control = `<select data-cs-value="${key}" class="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"><option value="">Select…</option><option ${value === 'Yes' ? 'selected' : ''}>Yes</option><option ${value === 'No' ? 'selected' : ''}>No</option></select>`;
-            } else {
-                control = `<input type="text" data-cs-value="${key}" value="${escCase(value)}" class="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">`;
+                return `<select data-cs-value="${escCase(key)}" class="w-full border-0 outline-none text-sm"><option value=""></option>${opts.map(o=>`<option ${value===o?'selected':''}>${escCase(o)}</option>`).join('')}</select>`;
             }
-            let inference = '';
-            if (includeInference) {
-                const options = INFERENCE_OPTIONS[inferenceGroup] || INFERENCE_OPTIONS.normal;
-                const inf = caseSheetInference(store, key);
-                const showOther = inf === 'Other / clinician wording';
-                inference = `
-                    <div class="mt-2 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
-                        <select data-cs-inference="${key}" class="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                            <option value="">Inference ▼</option>${options.map(o => `<option ${inf === o ? 'selected' : ''}>${escCase(o)}</option>`).join('')}
-                        </select>
-                        <input type="text" data-cs-remark="${key}" value="${escCase(remark)}" placeholder="If any / remarks" class="w-full px-3 py-2 rounded-lg border border-slate-200 ${showOther ? 'bg-white' : 'bg-slate-50'} text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                    </div>`;
-            } else if (type !== 'textarea' && type !== 'checkbox') {
-                inference = `<input type="text" data-cs-remark="${key}" value="${escCase(remark)}" placeholder="If any / remarks" class="mt-2 w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">`;
-            }
-            return `<div class="bg-white border border-slate-200 rounded-xl p-3"><div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-3 items-start"><label class="text-sm font-semibold text-slate-700 pt-2">${escCase(label)}</label><div>${control}${inference}</div></div></div>`;
+            if (type === 'textarea') return `<textarea data-cs-value="${escCase(key)}" rows="2" class="w-full border-0 outline-none text-sm resize-y" placeholder="">${escCase(value)}</textarea>`;
+            return `<input data-cs-value="${escCase(key)}" type="${type === 'currency' ? 'number' : type}" value="${escCase(value)}" class="w-full border-0 outline-none text-sm ${type==='currency'?'text-right':''}" ${type==='currency'?'min="0" step="1"':''}>`;
         }
+        function inferenceSelect(key, group, store) {
+            const opts = INFERENCE_OPTIONS[group] || INFERENCE_OPTIONS.neutral;
+            const current = caseSheetInference(store,key);
+            return `<select data-cs-inference="${escCase(key)}" class="w-full border border-slate-300 rounded px-2 py-1.5 text-xs"><option value="">Select inference ▼</option>${opts.map(o=>`<option value="${escCase(o)}" ${current===o?'selected':''}>${escCase(o)}</option>`).join('')}</select>`;
+        }
+        function renderCaseRowsTable(rows, store, group='neutral') {
+            return `<div class="overflow-x-auto"><table class="case-sheet-table min-w-[780px]"><thead><tr><th class="w-[42%]">FIELD</th><th>VALUE</th></tr></thead><tbody>${rows.map(([key,label,type])=>`<tr><td class="font-semibold">${escCase(label)}</td><td>${caseFieldControl(key,label,type,store)}</td></tr>`).join('')}</tbody></table></div>`;
+        }
+        function sectionRemarks(key, store) { return `<div class="mt-2"><div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Remarks / If any</div><textarea data-cs-remark="${escCase(key)}" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm mt-1" rows="2">${escCase(caseSheetRemark(store,key))}</textarea></div>`; }
 
         function renderCaseHistorySheet(patient) {
             const store = patient.caseSheets?.case_history || {};
-            return `
-                <div class="case-sheet-print-root space-y-5">
-                    <div class="flex items-center justify-between gap-3 case-sheet-no-print">
-                        <div><h2 class="text-lg font-bold text-slate-800">I. CASE HISTORY RECORD</h2><p class="text-xs text-slate-500">Structured digital version of the supplied case-history format. Use “If any / remarks” for clinician-specific wording.</p></div>
-                        <div class="flex gap-2"><button id="case-sheet-save" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-floppy-disk mr-1.5"></i>Save</button><button id="case-sheet-print" class="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-print mr-1.5"></i>Print</button><button id="case-sheet-clear" class="bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-eraser mr-1.5"></i>Clear</button></div>
-                    </div>
-                    ${CASE_HISTORY_SECTIONS.map(sec => `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><div class="grid grid-cols-1 gap-2 p-2 bg-slate-50 border-x border-b border-slate-200">${sec.fields.map(f => renderCaseField(f, store, false)).join('')}</div></section>`).join('')}
-                </div>
-            `;
+            const personal = CASE_HISTORY_SECTIONS[0];
+            return `<div class="case-sheet-print-root case-sheet-paper p-4 space-y-4">
+                <div class="case-sheet-no-print flex items-center justify-between gap-3"><div><h2 class="text-lg font-bold text-slate-900">PATIENT RECORD</h2><p class="text-xs text-slate-500">Case history and clinical examination — original sequence preserved.</p></div>${caseSheetActions()}</div>
+                <section><div class="case-sheet-section-title">CONSENT FORM</div><div class="border border-black p-4 text-sm leading-6">I have been explained about the possibilities and limitation of treatment and side effect including demineralization of enamel (discolorations) and limitation of gums. I have also been briefed about the Duration, Maintenance of appliance, keeping of Appointments and the Financial Commitments pertaining to the treatment. I agree with the above treatment plan and give my full consent for the Treatment Procedure as deemed Necessary.</div><table class="case-sheet-table mt-2"><tbody><tr><td class="font-semibold w-1/3">Patient Name</td><td><input data-cs-value="consent_patient_name" value="${escCase(caseSheetValue(store,'consent_patient_name') || patient.name || '')}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Age</td><td><input data-cs-value="consent_age" value="${escCase(caseSheetValue(store,'consent_age') || patient.age || '')}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Name & Signature (Parent /Guardian)</td><td><input data-cs-value="consent_signature" value="${escCase(caseSheetValue(store,'consent_signature'))}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Date</td><td><input data-cs-value="consent_date" type="date" value="${escCase(caseSheetValue(store,'consent_date'))}" class="w-full border-0 outline-none"></td></tr></tbody></table></section>
+                <section><div class="case-sheet-section-title">I. CASE HISTORY RECORD — A. PERSONAL DETAILS</div><table class="case-sheet-table"><tbody>${(personal.rows||[]).map(([k,l,type])=>`<tr><td class="font-semibold w-1/3">${escCase(l)}</td><td>${caseFieldControl(k,l,type,store)}</td></tr>`).join('')}</tbody></table></section>
+                ${CASE_HISTORY_SECTIONS.slice(1).map((sec, idx)=>{
+                    if(sec.family) return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th></th><th>FATHER</th><th>MOTHER</th><th>SIBLINGS</th><th>IF ANY / REMARKS</th></tr></thead><tbody><tr><td class="font-semibold">Malocclusion</td>${['father','mother','siblings'].map(x=>`<td><select data-cs-value="family_malocclusion_${x}" class="w-full border-0 outline-none text-sm"><option value=""></option><option ${caseSheetValue(store,'family_malocclusion_'+x)==='Yes'?'selected':''}>Yes</option><option ${caseSheetValue(store,'family_malocclusion_'+x)==='No'?'selected':''}>No</option></select></td>`).join('')}<td rowspan="2"><textarea data-cs-remark="family_remarks" class="w-full border-0 outline-none text-sm" rows="4">${escCase(caseSheetRemark(store,'family_remarks'))}</textarea></td></tr><tr><td class="font-semibold">Familial diseases</td>${['father','mother','siblings'].map(x=>`<td><select data-cs-value="family_disease_${x}" class="w-full border-0 outline-none text-sm"><option value=""></option><option ${caseSheetValue(store,'family_disease_'+x)==='Yes'?'selected':''}>Yes</option><option ${caseSheetValue(store,'family_disease_'+x)==='No'?'selected':''}>No</option></select></td>`).join('')}</tr></tbody></table></section>`;
+                    if(sec.habits) return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><tbody>${[['habit_none','None'],['habit_thumb','Finger Thumb Sucking'],['habit_lip','Lip biting'],['habit_tongue','Tongue thrusting'],['habit_nail','Nail Biting'],['habit_bruxism','Bruxism']].map(([k,l])=>`<tr><td class="font-semibold w-2/3">${escCase(l)}</td><td class="text-center"><input data-cs-value="${k}" type="checkbox" ${caseSheetValue(store,k)==='true'?'checked':''}></td></tr>`).join('')}<tr><td class="font-semibold">Other (specify)</td><td>${caseFieldControl('habit_other','Other','textarea',store)}</td></tr></tbody></table></section>`;
+                    const showRemarks = sec.title==='E. DENTAL HISTORY' || sec.title==='F. MEDICAL HISTORY';
+                    return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div>${renderCaseRowsTable(sec.rows,store)}${showRemarks?sectionRemarks('remarks_'+idx,store):''}</section>`;
+                }).join('')}
+            </div>`;
         }
 
-        function renderModelAnalysisSheet(patient) {
+        function caseSheetActions(){ return `<div class="flex gap-2"><button id="case-sheet-save" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-floppy-disk mr-1.5"></i>Save</button><button id="case-sheet-print" class="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-print mr-1.5"></i>Print</button><button id="case-sheet-clear" class="bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-eraser mr-1.5"></i>Clear</button></div>`; }
+
+        function modelValue(store,key){ return caseSheetValue(store,key); }
+        function renderInferenceCell(key, group, store){ return `<td>${inferenceSelect(key,group,store)}</td>`; }
+        function renderModelAnalysisSheet(patient){
             const store = patient.caseSheets?.model_analysis || {};
-            const activeModelSection = appState.caseModelSection || 'model';
-            return `
-                <div class="case-sheet-print-root space-y-5">
-                    <div class="flex items-center justify-between gap-3 case-sheet-no-print">
-                        <div><h2 class="text-lg font-bold text-slate-800">III / IV. MODEL & CEPHALOMETRIC ANALYSIS</h2><p class="text-xs text-slate-500">Type the clinician’s reading manually, then choose one literature-based inference from the arrow. No automatic clinical conclusion is applied.</p></div>
-                        <div class="flex gap-2"><button id="case-sheet-save" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-floppy-disk mr-1.5"></i>Save</button><button id="case-sheet-print" class="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-print mr-1.5"></i>Print</button><button id="case-sheet-clear" class="bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-eraser mr-1.5"></i>Clear</button></div>
-                    </div>
-                    <div class="case-sheet-no-print flex gap-2 flex-wrap">
-                        <button data-model-section="model" class="case-model-section px-4 py-2 rounded-xl text-xs font-semibold ${activeModelSection === 'model' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'} cursor-pointer">Model Analysis</button>
-                        <button data-model-section="ceph" class="case-model-section px-4 py-2 rounded-xl text-xs font-semibold ${activeModelSection === 'ceph' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'} cursor-pointer">Radiographic & Cephalometric Analysis</button>
-                        <button data-model-section="composite" class="case-model-section px-4 py-2 rounded-xl text-xs font-semibold ${activeModelSection === 'composite' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'} cursor-pointer">Composite Cephalometric</button>
-                    </div>
-                    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900"><strong>Inference rule:</strong> the doctor enters the reading; the dropdown supplies source-based interpretations. “Other / clinician wording” is always available. Where the original article provides a norm/relationship rather than verbatim sentence wording, the dropdown uses a concise, source-faithful clinical label rather than claiming to quote the article.</div>
-                    ${activeModelSection === 'model' ? renderModelSections(store) : activeModelSection === 'ceph' ? renderCephalometricSections(store) : renderCompositeCeph(store)}
-                </div>
-            `;
+            return `<div class="case-sheet-print-root case-sheet-paper p-4 space-y-5">
+                <div class="flex items-center justify-between gap-3 case-sheet-no-print"><div><h2 class="text-lg font-bold text-slate-900">III. MODEL ANALYSIS</h2><p class="text-xs text-slate-500">Patient readings are entered manually. Inference is selected by the doctor.</p></div>${caseSheetActions()}</div>
+                ${MODEL_ANALYSIS_SECTIONS.map((sec,idx)=>renderModelSection(sec,store,idx)).join('')}
+            </div>`;
+        }
+        function renderModelSection(sec,store,idx){
+            if(sec.type==='table') return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>RELATION</th><th>RIGHT</th><th>LEFT</th></tr></thead><tbody>${sec.rows.map(([k,l])=>`<tr><td class="font-semibold">${l}</td><td><input data-cs-value="${k}_r" value="${escCase(modelValue(store,k+'_r'))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="${k}_l" value="${escCase(modelValue(store,k+'_l'))}" class="w-full border-0 outline-none"></td></tr>`).join('')}</tbody></table>${sec.footRows.map(([k,l,u,g])=>`<table class="case-sheet-table mt-2"><tbody><tr><td class="font-semibold w-2/5">${escCase(l)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none" placeholder="${escCase(u)}"></td></tr><tr><td class="font-semibold">Inference</td><td>${inferenceSelect(k,g,store)}</td></tr></tbody></table>`).join('')}${sectionRemarks('model_remarks_'+idx,store)}</section>`;
+            if(sec.type==='toothwidth' || sec.type==='toothwidth_md') { const prefix=sec.type==='toothwidth'?'mx':'md'; return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>TOOTH NUMBER</th><th>RIGHT</th><th>LEFT</th></tr></thead><tbody>${sec.rows.map(([n])=>`<tr><td>${n}</td><td><input data-cs-value="${prefix}_tooth_${n}_r" value="${escCase(modelValue(store,prefix+'_tooth_'+n+'_r'))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="${prefix}_tooth_${n}_l" value="${escCase(modelValue(store,prefix+'_tooth_'+n+'_l'))}" class="w-full border-0 outline-none"></td></tr>`).join('')}</tbody></table></section>`; }
+            if(sec.type==='metrics') return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>PARAMETER</th><th>PATIENT’S VALUE</th><th>NORMAL VALUE</th><th>DIFFERENCE</th></tr></thead><tbody>${sec.rows.map(([k,l,ref,g])=>`<tr><td class="font-semibold">${escCase(l)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none"></td><td>${escCase(ref)}</td><td><input data-cs-value="${k}_difference" value="${escCase(modelValue(store,k+'_difference'))}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Inference</td><td colspan="3">${inferenceSelect(k,g,store)}</td></tr>`).join('')}</tbody></table>${sectionRemarks('model_remarks_'+idx,store)}</section>`;
+            if(sec.type==='metrics2') return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>REGION</th><th>RIGHT</th><th>LEFT</th><th>DIFFERENCE</th></tr></thead><tbody>${sec.rows.map(([k,l])=>`<tr><td class="font-semibold">${escCase(l)}</td><td><input data-cs-value="${k}_r" value="${escCase(modelValue(store,k+'_r'))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="${k}_l" value="${escCase(modelValue(store,k+'_l'))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="${k}_difference" value="${escCase(modelValue(store,k+'_difference'))}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Inference</td><td colspan="3">${inferenceSelect(k,'symmetry',store)}</td></tr>`).join('')}</tbody></table>${sectionRemarks('model_remarks_'+idx,store)}</section>`;
+            if(sec.type==='archindex') return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>REGION / INDEX</th><th>ACTUAL</th><th>CALCULATED VALUE (CV)</th><th>DIFFERENCE</th></tr></thead><tbody>${sec.rows.map(([k,l,ref,g])=>`<tr><td class="font-semibold">${escCase(l)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none"></td><td>${escCase(ref)}</td><td><input data-cs-value="${k}_difference" value="${escCase(modelValue(store,k+'_difference'))}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Inference</td><td colspan="3">${inferenceSelect(k,g,store)}</td></tr>`).join('')}</tbody></table>${sectionRemarks('model_remarks_'+idx,store)}</section>`;
+            if(sec.type==='indexRows') return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>PARAMETER</th><th>PATIENT / ACTUAL</th><th>CALCULATED / REFERENCE</th><th>DIFFERENCE</th></tr></thead><tbody>${sec.rows.map(([k,l,ref,g])=>`<tr><td class="font-semibold">${escCase(l)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none"></td><td>${escCase(ref)}</td><td><input data-cs-value="${k}_difference" value="${escCase(modelValue(store,k+'_difference'))}" class="w-full border-0 outline-none"></td></tr><tr><td class="font-semibold">Inference</td><td colspan="3">${inferenceSelect(k,g,store)}</td></tr>`).join('')}</tbody></table>${sectionRemarks('model_remarks_'+idx,store)}</section>`;
+            if(sec.type==='spaceTable') return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>NO.</th><th>SPACE REQUIRED IN ARCH</th><th>IN MM</th></tr></thead><tbody>${sec.rows.map(([k,l],i)=>`<tr><td>${i+1}</td><td class="font-semibold">${escCase(l)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none"></td></tr>`).join('')}<tr><td></td><td class="font-semibold">Inference</td><td>${inferenceSelect('space_inf_'+idx,'space',store)}</td></tr></tbody></table><div class="mt-3"><div class="case-sheet-section-title">SPACE AVAILABLE</div><table class="case-sheet-table"><thead><tr><th>NO.</th><th>SPACE AVAILABLE IN ARCH</th><th>IN MM</th></tr></thead><tbody>${(sec.available||[]).map(([k,l],i)=>`<tr><td>${i+1}</td><td class="font-semibold">${escCase(l)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none"></td></tr>`).join('')}</tbody></table></div>${sectionRemarks('model_remarks_'+idx,store)}</section>`;
+            return '';
         }
 
-        function renderModelSections(store) {
-            return MODEL_ANALYSIS_SECTIONS.map(sec => `
-                <section>
-                    <div class="case-sheet-section-title">${escCase(sec.title)}</div>
-                    <div class="overflow-x-auto">
-                        <table class="case-sheet-table min-w-[920px]"><thead><tr><th class="w-[29%]">Measurement</th><th class="w-[13%]">Reading</th><th class="w-[16%]">Unit</th><th>Inference</th></tr></thead><tbody>
-                        ${sec.rows.map(([key,label,unit,group]) => `<tr><td class="font-semibold text-slate-700">${escCase(label)}</td><td><input data-cs-value="${key}" value="${escCase(caseSheetValue(store,key))}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" placeholder="Enter reading"></td><td class="text-xs text-slate-500">${escCase(unit)}</td><td><select data-cs-inference="${key}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"><option value="">Inference ▼</option>${(INFERENCE_OPTIONS[group]||INFERENCE_OPTIONS.normal).map(o=>`<option ${caseSheetInference(store,key)===o?'selected':''}>${escCase(o)}</option>`).join('')}</select><input data-cs-remark="${key}" value="${escCase(caseSheetRemark(store,key))}" placeholder="If any / remarks" class="mt-1.5 w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs"></td></tr>`).join('')}
-                        </tbody></table>
-                    </div>
-                    <div class="case-sheet-note mt-1">Source basis: ${escCase(sec.source)}</div>
-                </section>`).join('');
+        function renderCephalometricSheet(patient){
+            const store = patient.caseSheets?.cephalometric_analysis || {};
+            return `<div class="case-sheet-print-root case-sheet-paper p-4 space-y-5">
+                <div class="flex items-center justify-between gap-3 case-sheet-no-print"><div><h2 class="text-lg font-bold text-slate-900">IV. RADIOGRAPHIC & CEPHALOMETRIC ANALYSIS</h2><p class="text-xs text-slate-500">The supplied analysis sequence and reference columns are retained.</p></div>${caseSheetActions()}</div>
+                <div class="case-sheet-no-print flex gap-2 flex-wrap"><button data-ceph-section="analyses" class="case-ceph-nav px-4 py-2 rounded-xl text-xs font-semibold ${appState.caseCephSection==='analyses'?'bg-emerald-600 text-white':'bg-slate-100 text-slate-600'} cursor-pointer">Individual Analyses</button><button data-ceph-section="composite" class="case-ceph-nav px-4 py-2 rounded-xl text-xs font-semibold ${appState.caseCephSection==='composite'?'bg-emerald-600 text-white':'bg-slate-100 text-slate-600'} cursor-pointer">Composite Cephalometric Analysis</button></div>
+                ${appState.caseCephSection==='composite' ? renderCompositeCeph(store) : CEPH_ANALYSES.map(a=>renderCephAnalysis(a,store)).join('')}
+            </div>`;
         }
-
-        function renderCephalometricSections(store) {
-            return CEPH_ANALYSES.map(analysis => `
-                <section>
-                    <div class="case-sheet-section-title">${escCase(analysis.title)}</div>
-                    <div class="overflow-x-auto">
-                        <table class="case-sheet-table min-w-[1080px]"><thead><tr><th>Measurement</th><th>Reference / Mean</th><th>Patient Reading</th><th>Inference ▼</th><th>If any / Remarks</th></tr></thead><tbody>
-                        ${analysis.rows.map(([key,label,ref,meta]) => { const [unit,group]=meta.split(', '); const opts=INFERENCE_OPTIONS[group]||INFERENCE_OPTIONS.normal; return `<tr><td class="font-semibold text-slate-700">${escCase(label)}<div class="text-[10px] text-slate-400 mt-0.5">${escCase(unit)}</div></td><td class="text-xs text-slate-500">${escCase(ref)}</td><td><input data-cs-value="${key}" value="${escCase(caseSheetValue(store,key))}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm" placeholder="Enter reading"></td><td><select data-cs-inference="${key}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"><option value="">Inference ▼</option>${opts.map(o=>`<option ${caseSheetInference(store,key)===o?'selected':''}>${escCase(o)}</option>`).join('')}</select></td><td><input data-cs-remark="${key}" value="${escCase(caseSheetRemark(store,key))}" placeholder="If any / remarks" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs"></td></tr>`; }).join('')}
-                        </tbody></table>
-                    </div>
-                    <div class="case-sheet-note mt-1">Source: ${escCase(analysis.source)}</div>
-                </section>`).join('');
+        function renderCephAnalysis(a,store){
+            if(a.kind==='fields') return `<section><div class="case-sheet-section-title">${escCase(a.title)}</div><table class="case-sheet-table"><thead><tr><th>OBSERVATION</th><th>PATIENT ENTRY</th></tr></thead><tbody>${a.fields.map(([k,l])=>`<tr><td class="font-semibold">${escCase(l)}</td><td><textarea data-cs-value="${k}" rows="1" class="w-full border-0 outline-none">${escCase(modelValue(store,k))}</textarea></td></tr>`).join('')}</tbody></table>${sectionRemarks(a.id+'_remarks',store)}</section>`;
+            if(a.kind==='cvm') return `<section><div class="case-sheet-section-title">${escCase(a.title)}</div><table class="case-sheet-table"><thead><tr><th>STAGE</th><th>CLINICIAN ENTRY</th><th>INFERENCE ▼</th></tr></thead><tbody><tr><td>Selected CVM Stage</td><td><input data-cs-value="cvm_stage" value="${escCase(modelValue(store,'cvm_stage'))}" class="w-full border-0 outline-none"></td><td>${inferenceSelect('cvm_stage_inf','cvm',store)}</td></tr></tbody></table><div class="mt-2 text-xs text-slate-500">The supplied form describes stages 1–6 (Initiation, Acceleration, Transition, Deceleration, Maturation, Completion).</div>${sectionRemarks(a.id+'_remarks',store)}</section>`;
+            return `<section><div class="case-sheet-section-title">${escCase(a.title)}</div><table class="case-sheet-table"><thead><tr><th>MEASUREMENT</th><th>MEAN / REFERENCE</th><th>PATIENT VALUE</th><th>INFERENCE ▼</th></tr></thead><tbody>${a.rows.map(([k,l,ref,g])=>`<tr><td class="font-semibold">${escCase(l)}</td><td class="text-xs">${escCase(ref)}</td><td><input data-cs-value="${k}" value="${escCase(modelValue(store,k))}" class="w-full border-0 outline-none"></td>${renderInferenceCell(k,g,store)}</tr>`).join('')}</tbody></table>${sectionRemarks(a.id+'_remarks',store)}</section>`;
         }
+        function renderCompositeCeph(store){ return `<div class="space-y-5">${COMPOSITE_CEPH_SECTIONS.map((sec,si)=>`<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>PARAMETER</th><th>MEAN VALUE</th><th>PRE-TREATMENT</th><th>MID-TREATMENT</th><th>POST-TREATMENT</th><th>RESULT / INFERENCE ▼</th></tr></thead><tbody>${sec.rows.map(([k,l,ref])=>`<tr><td class="font-semibold">${escCase(l)}</td><td class="text-xs">${escCase(ref)}</td><td><input data-cs-value="${k}_pre" value="${escCase(modelValue(store,k+'_pre'))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="${k}_mid" value="${escCase(modelValue(store,k+'_mid'))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="${k}_post" value="${escCase(modelValue(store,k+'_post'))}" class="w-full border-0 outline-none"></td><td>${inferenceSelect(k+'_result','neutral',store)}</td></tr>`).join('')}</tbody></table>${sectionRemarks('comp_remarks_'+si,store)}</section>`).join('')}</div>`; }
 
-        function renderCompositeCeph(store) {
-            return COMPOSITE_CEPH_SECTIONS.map(sec => `
-                <section>
-                    <div class="case-sheet-section-title">${escCase(sec.title)}</div>
-                    <div class="overflow-x-auto">
-                        <table class="case-sheet-table min-w-[1250px]"><thead><tr><th>Parameter</th><th>Mean / Reference</th><th>Pre-Treatment</th><th>Mid-Treatment</th><th>Post-Treatment</th><th>Result / Inference ▼</th><th>Remarks</th></tr></thead><tbody>
-                        ${sec.rows.map(([key,label,ref]) => { const resultKey = key+'_result'; const r=caseSheetInference(store,resultKey); return `<tr><td class="font-semibold text-slate-700">${escCase(label)}</td><td class="text-xs text-slate-500">${escCase(ref)}</td><td><input data-cs-value="${key}_pre" value="${escCase(caseSheetValue(store,key+'_pre'))}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"></td><td><input data-cs-value="${key}_mid" value="${escCase(caseSheetValue(store,key+'_mid'))}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"></td><td><input data-cs-value="${key}_post" value="${escCase(caseSheetValue(store,key+'_post'))}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"></td><td><select data-cs-inference="${resultKey}" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm"><option value="">Inference ▼</option>${INFERENCE_OPTIONS.normal.map(o=>`<option ${r===o?'selected':''}>${escCase(o)}</option>`).join('')}</select></td><td><input data-cs-remark="${resultKey}" value="${escCase(caseSheetRemark(store,resultKey))}" placeholder="If any / remarks" class="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-xs"></td></tr>`; }).join('')}
-                        </tbody></table>
-                    </div>
-                </section>`).join('');
-        }
-
-        function renderDiagnosisPlanSheet(patient) {
+        function renderDiagnosisPlanSheet(patient){
             const store = patient.caseSheets?.diagnosis_plan || {};
-            return `
-                <div class="case-sheet-print-root space-y-5">
-                    <div class="flex items-center justify-between gap-3 case-sheet-no-print">
-                        <div><h2 class="text-lg font-bold text-slate-800">V. DIAGNOSIS & TREATMENT PLANNING</h2><p class="text-xs text-slate-500">Structured digital version of the supplied diagnosis and treatment-planning format.</p></div>
-                        <div class="flex gap-2"><button id="case-sheet-save" class="bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-floppy-disk mr-1.5"></i>Save</button><button id="case-sheet-print" class="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-print mr-1.5"></i>Print</button><button id="case-sheet-clear" class="bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer"><i class="fa-solid fa-eraser mr-1.5"></i>Clear</button></div>
-                    </div>
-                    ${DIAGNOSIS_PLAN_SECTIONS.map(sec => `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><div class="grid grid-cols-1 gap-2 p-2 bg-slate-50 border-x border-b border-slate-200">${sec.fields.map(f => renderCaseField(f, store, false)).join('')}</div></section>`).join('')}
-                </div>
-            `;
+            return `<div class="case-sheet-print-root case-sheet-paper p-4 space-y-5">
+                <div class="flex items-center justify-between gap-3 case-sheet-no-print"><div><h2 class="text-lg font-bold text-slate-900">V. DIAGNOSIS AND TREATMENT PLANNING</h2><p class="text-xs text-slate-500">Original treatment-planning sequence retained.</p></div>${caseSheetActions()}</div>
+                ${DIAGNOSIS_PLAN_SECTIONS.map((sec,idx)=>{
+                    if(sec.paymentTable) return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div>${renderCaseRowsTable(sec.rows,store)}<table class="case-sheet-table mt-2"><thead><tr><th>PAYMENT</th><th>CHARGES</th><th>RECEIPT NO AND DATE</th></tr></thead><tbody>${[1,2,3,4].map(i=>`<tr><td><input data-cs-value="pay_${i}" value="${escCase(modelValue(store,'pay_'+i))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="charge_${i}" value="${escCase(modelValue(store,'charge_'+i))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="receipt_${i}" value="${escCase(modelValue(store,'receipt_'+i))}" class="w-full border-0 outline-none"></td></tr>`).join('')}</tbody></table></section>`;
+                    if(sec.treatmentRecord) return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div><table class="case-sheet-table"><thead><tr><th>DATE</th><th>TREATMENT DONE</th><th>NEXT APPOINTMENT</th><th>SIGNATURE</th><th>REMARK</th></tr></thead><tbody>${Array.from({length:6},(_,i)=>`<tr><td><input data-cs-value="tr_date_${i+1}" type="date" value="${escCase(modelValue(store,'tr_date_'+(i+1)))}" class="w-full border-0 outline-none"></td><td><textarea data-cs-value="tr_treatment_${i+1}" rows="1" class="w-full border-0 outline-none">${escCase(modelValue(store,'tr_treatment_'+(i+1)))}</textarea></td><td><input data-cs-value="tr_next_${i+1}" type="date" value="${escCase(modelValue(store,'tr_next_'+(i+1)))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="tr_signature_${i+1}" value="${escCase(modelValue(store,'tr_signature_'+(i+1)))}" class="w-full border-0 outline-none"></td><td><input data-cs-value="tr_remark_${i+1}" value="${escCase(modelValue(store,'tr_remark_'+(i+1)))}" class="w-full border-0 outline-none"></td></tr>`).join('')}</tbody></table></section>`;
+                    return `<section><div class="case-sheet-section-title">${escCase(sec.title)}</div>${renderCaseRowsTable(sec.rows,store)}${idx===0?sectionRemarks('diagnosis_remarks',store):''}</section>`;
+                }).join('')}
+            </div>`;
         }
 
-        function renderCaseSheetsPanel(patient) {
-            if (!patient) return `<div class="bg-white rounded-2xl p-8 text-center">Patient not found.</div>`;
-            if (!patient.caseSheets) patient.caseSheets = { case_history: {}, model_analysis: {}, diagnosis_plan: {} };
+        function renderCaseSheetsPanel(patient){
+            if(!patient) return `<div class="bg-white rounded-2xl p-8 text-center">Patient not found.</div>`;
+            if(!patient.caseSheets) patient.caseSheets = { case_history:{}, model_analysis:{}, cephalometric_analysis:{}, diagnosis_plan:{} };
             const active = CASE_SHEET_TYPES[appState.activeCaseSheet] ? appState.activeCaseSheet : 'case_history';
             const isAdmin = isAdminViewingDoctor();
-            const content = active === 'case_history' ? renderCaseHistorySheet(patient) : active === 'model_analysis' ? renderModelAnalysisSheet(patient) : renderDiagnosisPlanSheet(patient);
-            return `
-                <div class="grid grid-cols-1 lg:grid-cols-[250px_minmax(0,1fr)] gap-5">
-                    <aside class="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 h-fit lg:sticky lg:top-2 case-sheet-no-print">
-                        <div class="mb-3"><h3 class="font-bold text-slate-800">Case Sheets</h3><p class="text-xs text-slate-500 mt-1">Keep the supplied clinical format; enter your own findings.</p></div>
-                        <div class="space-y-2">
-                            ${Object.entries(CASE_SHEET_TYPES).map(([key,meta])=>`<button data-case-sheet="${key}" class="case-sheet-nav w-full text-left p-3 rounded-xl border ${active===key?'border-emerald-300 bg-emerald-50':'border-slate-200 bg-white hover:bg-slate-50'} cursor-pointer"><div class="flex items-center gap-3"><i class="fa-solid ${meta.icon} ${active===key?'text-emerald-600':'text-slate-400'}"></i><div><div class="font-semibold text-sm text-slate-800">${escCase(meta.label)}</div><div class="text-[10px] text-slate-500 mt-0.5">${escCase(meta.desc)}</div></div></div></button>`).join('')}
-                        </div>
-                        ${isAdmin ? `<div class="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600"><i class="fa-solid fa-eye mr-1.5"></i> Administrator view is read-only.</div>` : ''}
-                    </aside>
-                    <section>${content}</section>
-                </div>
-            `;
+            const content = active==='case_history' ? renderCaseHistorySheet(patient) : active==='model_analysis' ? renderModelAnalysisSheet(patient) : active==='cephalometric_analysis' ? renderCephalometricSheet(patient) : renderDiagnosisPlanSheet(patient);
+            return `<div class="grid grid-cols-1 lg:grid-cols-[235px_minmax(0,1fr)] gap-5"><aside class="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 h-fit lg:sticky lg:top-2 case-sheet-no-print"><div class="mb-3"><h3 class="font-bold text-slate-800">Case Sheets</h3><p class="text-xs text-slate-500 mt-1">Original format preserved; clinician selects inference.</p></div><div class="space-y-2">${Object.entries(CASE_SHEET_TYPES).map(([key,meta])=>`<button data-case-sheet="${key}" class="case-sheet-nav w-full text-left p-3 rounded-xl border ${active===key?'border-emerald-300 bg-emerald-50':'border-slate-200 bg-white hover:bg-slate-50'} cursor-pointer"><div class="flex items-center gap-3"><i class="fa-solid ${meta.icon} ${active===key?'text-emerald-600':'text-slate-400'}"></i><div><div class="font-semibold text-sm text-slate-800">${escCase(meta.label)}</div><div class="text-[10px] text-slate-500 mt-0.5">${escCase(meta.desc)}</div></div></div></button>`).join('')}</div>${isAdmin?`<div class="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600"><i class="fa-solid fa-eye mr-1.5"></i> Administrator view is read-only.</div>`:''}</aside><section>${content}</section></div>`;
         }
 
-        async function loadCaseSheetsForPatient(patientId) {
-            const patient = appState.patients.find(p => p.id === patientId);
-            if (!patient || !patientId || patient.caseSheetsLoaded) return;
-            appState.caseSheetLoading = true;
-            try {
-                const { data, error } = await supabaseClient
-                    .from('patient_case_sheets')
-                    .select('*')
-                    .eq('patient_id', patientId);
-                if (error) throw error;
-                patient.caseSheets = { case_history: {}, model_analysis: {}, diagnosis_plan: {} };
-                (data || []).forEach(row => { if (CASE_SHEET_TYPES[row.sheet_type]) patient.caseSheets[row.sheet_type] = row.data || {}; });
-                patient.caseSheetsLoaded = true;
-            } finally {
-                appState.caseSheetLoading = false;
-            }
+        async function loadCaseSheetsForPatient(patientId){
+            const patient=appState.patients.find(p=>p.id===patientId); if(!patient||!patientId||patient.caseSheetsLoaded) return;
+            appState.caseSheetLoading=true;
+            try{
+                const {data,error}=await supabaseClient.from('patient_case_sheets').select('*').eq('patient_id',patientId); if(error) throw error;
+                patient.caseSheets={case_history:{},model_analysis:{},cephalometric_analysis:{},diagnosis_plan:{}};
+                (data||[]).forEach(row=>{ if(CASE_SHEET_TYPES[row.sheet_type]) patient.caseSheets[row.sheet_type]=row.data||{}; }); patient.caseSheetsLoaded=true;
+            } finally { appState.caseSheetLoading=false; }
         }
-
-        async function ensureCaseSheetsLoaded(patientId) {
-            if (!patientId) return;
-            const patient = appState.patients.find(p => p.id === patientId);
-            if (!patient || patient.caseSheetsLoaded) return;
-            try {
-                await loadCaseSheetsForPatient(patientId);
-                if (appState.currentView === 'patient_detail' && appState.selectedPatientId === patientId && appState.activeSubTab === 'case_sheets') render();
-            } catch (error) {
-                console.error(error);
-                showToast(`Unable to load case sheets: ${error.message || 'Unknown error'}`, 'error');
-            }
+        async function ensureCaseSheetsLoaded(patientId){
+            if(!patientId) return; const patient=appState.patients.find(p=>p.id===patientId); if(!patient||patient.caseSheetsLoaded) return;
+            try{ await loadCaseSheetsForPatient(patientId); if(appState.currentView==='patient_detail'&&appState.selectedPatientId===patientId&&appState.activeSubTab==='case_sheets') render(); }
+            catch(error){ console.error(error); showToast(`Unable to load case sheets: ${error.message||'Unknown error'}`,'error'); }
         }
-
-        function collectCaseSheetForm() {
-            const out = {};
-            document.querySelectorAll('[data-cs-value]').forEach(el => {
-                const key = el.getAttribute('data-cs-value');
-                let value = '';
-                if (el.type === 'checkbox') value = el.checked ? 'true' : 'false';
-                else value = el.value || '';
-                out[key] = { ...(out[key] || {}), value };
-            });
-            document.querySelectorAll('[data-cs-inference]').forEach(el => {
-                const key = el.getAttribute('data-cs-inference');
-                out[key] = { ...(out[key] || {}), inference: el.value || '' };
-            });
-            document.querySelectorAll('[data-cs-remark]').forEach(el => {
-                const key = el.getAttribute('data-cs-remark');
-                out[key] = { ...(out[key] || {}), remark: el.value || '' };
-            });
+        function collectCaseSheetForm(){
+            const out={}; document.querySelectorAll('[data-cs-value]').forEach(el=>{ const key=el.getAttribute('data-cs-value'); out[key]={...(out[key]||{}),value:el.type==='checkbox'?(el.checked?'true':'false'):(el.value||'')}; });
+            document.querySelectorAll('[data-cs-inference]').forEach(el=>{ const key=el.getAttribute('data-cs-inference'); out[key]={...(out[key]||{}),inference:el.value||''}; });
+            document.querySelectorAll('[data-cs-remark]').forEach(el=>{ const key=el.getAttribute('data-cs-remark'); out[key]={...(out[key]||{}),remark:el.value||''}; });
             return out;
         }
-
-        async function saveCaseSheetToCloud(patient, sheetType, payload) {
-            if (!patient?.id || isAdminViewingDoctor()) throw new Error('Administrator view is read-only.');
-            const ownerId = patient.ownerId || appState.user?.id;
-            if (!ownerId) throw new Error('Patient owner could not be identified.');
-            const { data, error } = await supabaseClient
-                .from('patient_case_sheets')
-                .upsert({ owner_id: ownerId, patient_id: patient.id, sheet_type: sheetType, data: payload, updated_at: new Date().toISOString() }, { onConflict: 'patient_id,sheet_type' })
-                .select('*')
-                .single();
-            if (error) throw error;
-            if (!patient.caseSheets) patient.caseSheets = { case_history: {}, model_analysis: {}, diagnosis_plan: {} };
-            patient.caseSheets[sheetType] = data.data || {};
-            patient.caseSheetsLoaded = true;
-            return data;
+        async function saveCaseSheetToCloud(patient,sheetType,payload){
+            if(!patient?.id||isAdminViewingDoctor()) throw new Error('Administrator view is read-only.'); const ownerId=patient.ownerId||appState.user?.id; if(!ownerId) throw new Error('Patient owner could not be identified.');
+            const {data,error}=await supabaseClient.from('patient_case_sheets').upsert({owner_id:ownerId,patient_id:patient.id,sheet_type:sheetType,data:payload,updated_at:new Date().toISOString()},{onConflict:'patient_id,sheet_type'}).select('*').single(); if(error) throw error;
+            if(!patient.caseSheets) patient.caseSheets={case_history:{},model_analysis:{},cephalometric_analysis:{},diagnosis_plan:{}}; patient.caseSheets[sheetType]=data.data||{}; patient.caseSheetsLoaded=true; return data;
         }
-
-        function bindCaseSheetOtherHints() {
-            document.querySelectorAll('[data-cs-inference]').forEach(sel => {
-                sel.addEventListener('change', () => {
-                    const key = sel.getAttribute('data-cs-inference');
-                    const remark = document.querySelector(`[data-cs-remark="${CSS.escape(key)}"]`);
-                    if (remark && sel.value === 'Other / clinician wording') { remark.classList.remove('bg-slate-50'); remark.classList.add('bg-white'); remark.focus(); }
-                });
-            });
-        }
-
-        function bindCaseSheetListeners() {
-            if (isAdminViewingDoctor()) {
-                document.querySelectorAll('[data-cs-value], [data-cs-inference], [data-cs-remark]').forEach(el => {
-                    el.disabled = true;
-                    el.setAttribute('aria-readonly', 'true');
-                });
-            }
-            document.querySelectorAll('.case-sheet-nav').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    appState.activeCaseSheet = btn.getAttribute('data-case-sheet') || 'case_history';
-                    appState.caseModelSection = 'model';
-                    render();
-                });
-            });
-            document.querySelectorAll('.case-model-section').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    appState.caseModelSection = btn.getAttribute('data-model-section') || 'model';
-                    render();
-                });
-            });
+        function bindCaseSheetOtherHints(){ document.querySelectorAll('[data-cs-inference]').forEach(sel=>sel.addEventListener('change',()=>{ if(sel.value==='Other / clinician wording'){ const area=document.querySelector(`[data-cs-remark="${CSS.escape(sel.getAttribute('data-cs-inference'))}"]`); if(area){area.focus();} } })); }
+        function bindCaseSheetListeners(){
+            if(isAdminViewingDoctor()) document.querySelectorAll('[data-cs-value],[data-cs-inference],[data-cs-remark]').forEach(el=>{el.disabled=true;el.setAttribute('aria-readonly','true');});
+            document.querySelectorAll('.case-sheet-nav').forEach(btn=>btn.addEventListener('click',()=>{appState.activeCaseSheet=btn.getAttribute('data-case-sheet')||'case_history';appState.caseCephSection='analyses';render();}));
+            document.querySelectorAll('.case-ceph-nav').forEach(btn=>btn.addEventListener('click',()=>{appState.caseCephSection=btn.getAttribute('data-ceph-section')||'analyses';render();}));
             bindCaseSheetOtherHints();
-
-            const saveBtn = document.getElementById('case-sheet-save');
-            if (saveBtn && !isAdminViewingDoctor()) saveBtn.addEventListener('click', async () => {
-                const patient = appState.patients.find(p => p.id === appState.selectedPatientId);
-                if (!patient) return;
-                saveBtn.disabled = true;
-                saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Saving…';
-                try {
-                    const payload = collectCaseSheetForm();
-                    await saveCaseSheetToCloud(patient, appState.activeCaseSheet, payload);
-                    showToast(`${CASE_SHEET_TYPES[appState.activeCaseSheet].label} saved successfully.`);
-                    render();
-                } catch (error) {
-                    console.error(error);
-                    showToast(`Case sheet could not be saved: ${error.message || 'Unknown error'}`, 'error');
-                    saveBtn.disabled = false;
-                    saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1.5"></i>Save';
-                }
-            });
-
-            document.getElementById('case-sheet-print')?.addEventListener('click', () => window.print());
-            if (!isAdminViewingDoctor()) document.getElementById('case-sheet-clear')?.addEventListener('click', async () => {
-                if (!confirm('Clear this entire case sheet? This removes the saved sheet data for this patient.')) return;
-                const patient = appState.patients.find(p => p.id === appState.selectedPatientId);
-                if (!patient) return;
-                try {
-                    const ownerId = patient.ownerId || appState.user?.id;
-                    const { error } = await supabaseClient.from('patient_case_sheets').delete().eq('patient_id', patient.id).eq('sheet_type', appState.activeCaseSheet).eq('owner_id', ownerId);
-                    if (error) throw error;
-                    patient.caseSheets[appState.activeCaseSheet] = {};
-                    showToast('Case sheet cleared.', 'info');
-                    render();
-                } catch (error) {
-                    console.error(error);
-                    showToast(`Case sheet could not be cleared: ${error.message || 'Unknown error'}`, 'error');
-                }
-            });
+            const saveBtn=document.getElementById('case-sheet-save');
+            if(saveBtn&&!isAdminViewingDoctor()) saveBtn.addEventListener('click',async()=>{const patient=appState.patients.find(p=>p.id===appState.selectedPatientId);if(!patient)return;saveBtn.disabled=true;saveBtn.innerHTML='<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>Saving…';try{const payload=collectCaseSheetForm();await saveCaseSheetToCloud(patient,appState.activeCaseSheet,payload);showToast(`${CASE_SHEET_TYPES[appState.activeCaseSheet].label} saved successfully.`);render();}catch(error){console.error(error);showToast(`Case sheet could not be saved: ${error.message||'Unknown error'}`,'error');saveBtn.disabled=false;saveBtn.innerHTML='<i class="fa-solid fa-floppy-disk mr-1.5"></i>Save';}});
+            document.getElementById('case-sheet-print')?.addEventListener('click',()=>window.print());
+            if(!isAdminViewingDoctor()) document.getElementById('case-sheet-clear')?.addEventListener('click',async()=>{if(!confirm('Clear this entire case sheet? This removes the saved sheet data for this patient.'))return;const patient=appState.patients.find(p=>p.id===appState.selectedPatientId);if(!patient)return;try{const ownerId=patient.ownerId||appState.user?.id;const {error}=await supabaseClient.from('patient_case_sheets').delete().eq('patient_id',patient.id).eq('sheet_type',appState.activeCaseSheet).eq('owner_id',ownerId);if(error)throw error;patient.caseSheets[appState.activeCaseSheet]={};showToast('Case sheet cleared.','info');render();}catch(error){console.error(error);showToast(`Case sheet could not be cleared: ${error.message||'Unknown error'}`,'error');}});
         }
-
 
         function renderPatientDetail() {
             const p = appState.patients.find(x => x.id === appState.selectedPatientId);
